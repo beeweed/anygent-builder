@@ -44,12 +44,6 @@ export default function InputBox({
     }
   }, [value, disabled, onSend]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
 
   const canSend = value.trim().length > 0 && !disabled && !!apiKey;
 
@@ -69,7 +63,6 @@ export default function InputBox({
             ref={textareaRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            onKeyDown={handleKeyDown}
             placeholder={
               !apiKey
                 ? 'Add your API key in Settings to start chatting...'
@@ -98,7 +91,7 @@ export default function InputBox({
           </div>
         </div>
         <p className="input-hint">
-          {disabled ? 'Waiting for response...' : 'Enter to send, Shift+Enter for new line'}
+          {disabled ? 'Waiting for response...' : 'Click Send to submit'}
         </p>
       </div>
     </div>
