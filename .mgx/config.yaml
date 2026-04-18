@@ -1,4 +1,4 @@
 build: null
 build_path: null
-dev: npx --yes yarn run dev
-install: null
+dev: pnpm run dev
+install: pnpm install
