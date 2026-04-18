@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Menu, Code2, Sun, Moon } from 'lucide-react';
+import { Menu, Code2, Sun, Moon, Activity } from 'lucide-react';
 import { useChats } from './hooks/useChats';
 import { useModels } from './hooks/useModels';
 import { loadSettings, saveSettings, generateId, saveTheme } from './utils/storage';
@@ -21,11 +21,11 @@ import SettingsModal from './components/SettingsModal';
 import FileExplorer from './components/FileExplorer';
 import CodeEditor from './components/CodeEditor';
 import SandboxControl from './components/SandboxControl';
-import { AppSettings, Message, ProviderId, SandboxState, ThemeMode } from './types';
+import { AppSettings, Message, ProviderId, SandboxState, SystemPromptMode, ThemeMode } from './types';
 import { FSNode, FSFile } from './types/fs';
 import { updateFileContent, mergeFileTrees } from './utils/fsOps';
 
-const MAX_AGENT_ITERATIONS = 15;
+const MAX_AGENT_ITERATIONS = 87;
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -72,6 +72,9 @@ export default function App() {
   const streamBufferRef = useRef('');
   const streamChatIdRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Iteration tracking (real, tied to active agent run)
+  const [iterationCount, setIterationCount] = useState(0);
 
   const [fsTree, setFsTree] = useState<FSNode[]>([]);
   const [activeFile, setActiveFile] = useState<FSFile | null>(null);
@@ -160,13 +163,20 @@ export default function App() {
   }, [models, selectedModel, settings, selectedProvider]);
 
   const handleSaveSettings = useCallback(
-    (keys: Record<ProviderId, string>, e2bKey: string) => {
+    (
+      keys: Record<ProviderId, string>,
+      e2bKey: string,
+      e2bTemplate: string,
+      systemPromptMode: SystemPromptMode
+    ) => {
       const currentKey = keys[selectedProvider];
       const updated: AppSettings = {
         ...settings,
         apiKey: currentKey,
         providerKeys: keys,
         e2bApiKey: e2bKey,
+        e2bTemplate,
+        systemPromptMode,
       };
       setSettings(updated);
       saveSettings(updated);
@@ -255,14 +265,22 @@ export default function App() {
 
       // No E2B key — can't create sandbox
       if (!settings.e2bApiKey) {
-        // Continue without sandbox — agent will work but no file system
+        return false;
+      }
+
+      // Template is required — guard is also in handleSend but double-check here
+      if (!settings.e2bTemplate || !settings.e2bTemplate.trim()) {
         return false;
       }
 
       setSandboxState({ status: 'creating', sandboxId: null, error: null });
 
       try {
-        const sandbox = await createSandboxForChat(settings.e2bApiKey, chatId);
+        const sandbox = await createSandboxForChat(
+          settings.e2bApiKey,
+          chatId,
+          settings.e2bTemplate
+        );
         const sbId = sandbox.sandboxId;
         setSandboxState({
           status: 'running',
@@ -281,17 +299,17 @@ export default function App() {
         return false;
       }
     },
-    [settings.e2bApiKey, refreshSandboxFiles, updateChatSandboxId]
+    [settings.e2bApiKey, settings.e2bTemplate, refreshSandboxFiles, updateChatSandboxId]
   );
 
   const handleCreateSandbox = useCallback(async () => {
-    if (!settings.e2bApiKey) {
+    if (!settings.e2bApiKey || !settings.e2bTemplate.trim()) {
       setSettingsOpen(true);
       return;
     }
     if (!activeChatId) return;
     await ensureSandboxForChat(activeChatId);
-  }, [settings.e2bApiKey, activeChatId, ensureSandboxForChat]);
+  }, [settings.e2bApiKey, settings.e2bTemplate, activeChatId, ensureSandboxForChat]);
 
   const handleDestroySandbox = useCallback(async () => {
     if (!activeChatId) return;
@@ -326,6 +344,12 @@ export default function App() {
       const currentKey = settings.providerKeys[selectedProvider];
       if (!currentKey || !selectedModel || streaming) return;
 
+      // Require E2B template before allowing AI chat
+      if (!settings.e2bTemplate || !settings.e2bTemplate.trim()) {
+        setSettingsOpen(true);
+        return;
+      }
+
       const priorMessages: Message[] = activeChat?.messages ?? [];
 
       let chatId = activeChatId;
@@ -348,9 +372,10 @@ export default function App() {
       abortControllerRef.current = abortController;
 
       setStreaming(true);
+      setIterationCount(0);
       streamChatIdRef.current = chatId;
 
-      // STEP 1: Auto-create sandbox on first message if E2B key is available
+      // STEP 1: Auto-create sandbox on first message
       const isFirstMessage = priorMessages.length === 0;
       if (isFirstMessage && settings.e2bApiKey && !hasSandbox(chatId)) {
         await ensureSandboxForChat(chatId);
@@ -359,6 +384,9 @@ export default function App() {
       try {
         for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
           if (abortController.signal.aborted) break;
+
+          // Update iteration counter (1-based for display)
+          setIterationCount(iteration + 1);
 
           const assistantMsgId = generateId();
           const assistantMsg: Message = {
@@ -396,7 +424,8 @@ export default function App() {
               },
             },
             selectedProvider,
-            true
+            true,
+            settings.systemPromptMode
           );
 
           if (hadError || abortController.signal.aborted) break;
@@ -472,6 +501,8 @@ export default function App() {
     [
       settings.providerKeys,
       settings.e2bApiKey,
+      settings.e2bTemplate,
+      settings.systemPromptMode,
       selectedProvider,
       selectedModel,
       streaming,
@@ -493,6 +524,7 @@ export default function App() {
     setFsTree([]);
     setActiveFile(null);
     setSandboxState({ status: 'idle', sandboxId: null, error: null });
+    setIterationCount(0);
     if (!isDesktop) setSidebarOpen(false);
   }, [createChat, selectedModel, selectedProvider, isDesktop]);
 
@@ -517,6 +549,7 @@ export default function App() {
           setSelectedModel(chat.model);
         }
       }
+      setIterationCount(0);
       if (!isDesktop) setSidebarOpen(false);
     },
     [setActiveChatId, isDesktop, chats, selectedProvider, settings]
@@ -539,6 +572,7 @@ export default function App() {
 
   const currentApiKey = settings.providerKeys[selectedProvider];
   const effectiveModel = activeChat?.model || selectedModel;
+  const hasTemplate = !!settings.e2bTemplate && !!settings.e2bTemplate.trim();
 
   const handleOpenFile = useCallback(
     async (file: FSFile) => {
@@ -612,7 +646,33 @@ export default function App() {
             <Menu size={20} />
           </button>
           <span className="app-logo">anygent builder</span>
+
+          {/* Iteration counter — shows current/max, tied to real agent loop */}
+          <div
+            className={`iteration-counter${streaming ? ' iteration-counter--active' : ''}`}
+            title={
+              streaming
+                ? `Agent iteration ${iterationCount} of ${MAX_AGENT_ITERATIONS}`
+                : `Iterations: ${iterationCount} / ${MAX_AGENT_ITERATIONS}`
+            }
+          >
+            <Activity size={13} className={streaming ? 'iteration-icon-pulse' : ''} />
+            <span className="iteration-counter-text">
+              {iterationCount}/{MAX_AGENT_ITERATIONS}
+            </span>
+          </div>
+
           <div className="header-spacer" />
+
+          {!hasTemplate && (
+            <button
+              className="template-warning-btn"
+              onClick={() => setSettingsOpen(true)}
+              title="E2B template required to chat"
+            >
+              Set E2B template
+            </button>
+          )}
 
           <button
             className="theme-toggle-btn"
@@ -659,7 +719,7 @@ export default function App() {
               onSend={handleSend}
               onStop={handleStop}
               onOpenSettings={() => setSettingsOpen(true)}
-              disabled={streaming}
+              disabled={streaming || !hasTemplate}
               apiKey={currentApiKey}
             />
           </div>
@@ -700,6 +760,8 @@ export default function App() {
         <SettingsModal
           providerKeys={settings.providerKeys}
           e2bApiKey={settings.e2bApiKey}
+          e2bTemplate={settings.e2bTemplate}
+          systemPromptMode={settings.systemPromptMode}
           onSave={handleSaveSettings}
           onClose={() => setSettingsOpen(false)}
         />

@@ -1,7 +1,7 @@
-import { Message, Model, ProviderId, ToolCall } from '../types';
+import { Message, Model, ProviderId, ToolCall, SystemPromptMode } from '../types';
 import { getProvider } from './providers';
 import { TOOL_DEFINITIONS } from './tools';
-import { getSystemMessage } from './systemprompt';
+import { getSystemMessage, getCompactSystemMessage } from './systemprompt';
 
 export async function fetchModels(apiKey: string, providerId: ProviderId = 'openrouter'): Promise<Model[]> {
   const provider = getProvider(providerId);
@@ -67,9 +67,13 @@ interface ApiMessage {
   tool_call_id?: string;
 }
 
-function buildApiMessages(messages: Message[]): ApiMessage[] {
+function buildApiMessages(
+  messages: Message[],
+  systemPromptMode: SystemPromptMode = 'big'
+): ApiMessage[] {
   // Inject system prompt as the first message
-  const systemMsg: ApiMessage = getSystemMessage();
+  const systemMsg: ApiMessage =
+    systemPromptMode === 'small' ? getCompactSystemMessage() : getSystemMessage();
   const converted: ApiMessage[] = messages.map((m) => {
     if (m.role === 'tool') {
       return {
@@ -113,7 +117,8 @@ export async function agentCompletion(
   messages: Message[],
   callbacks: AgentCallbacks,
   providerId: ProviderId = 'openrouter',
-  enableTools: boolean = true
+  enableTools: boolean = true,
+  systemPromptMode: SystemPromptMode = 'big'
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
   const provider = getProvider(providerId);
 
@@ -127,7 +132,7 @@ export async function agentCompletion(
     headers['X-Title'] = 'Anygent Builder';
   }
 
-  const apiMessages = buildApiMessages(messages);
+  const apiMessages = buildApiMessages(messages, systemPromptMode);
 
   // Try streaming first
   const body: Record<string, unknown> = {

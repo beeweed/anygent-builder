@@ -1,4 +1,4 @@
-import { Chat, AppSettings, ProviderId, ThemeMode } from '../types';
+import { Chat, AppSettings, ProviderId, ThemeMode, SystemPromptMode } from '../types';
 
 const CHATS_KEY = 'anygent_chats';
 const SETTINGS_KEY = 'anygent_settings';
@@ -11,7 +11,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   providerKeys: { openrouter: '', fireworks: '' },
   fireworksCustomModel: '',
   e2bApiKey: '',
+  e2bTemplate: '',
   theme: 'dark',
+  systemPromptMode: 'big',
 };
 
 export function loadChats(): Chat[] {
@@ -41,6 +43,8 @@ export function loadSettings(): AppSettings {
       openrouter: parsed.providerKeys?.openrouter || parsed.apiKey || '',
       fireworks: parsed.providerKeys?.fireworks || '',
     };
+    const systemPromptMode: SystemPromptMode =
+      parsed.systemPromptMode === 'small' ? 'small' : 'big';
     return {
       apiKey: providerKeys[parsed.selectedProvider || 'openrouter'] || parsed.apiKey || '',
       selectedModel: parsed.selectedModel || '',
@@ -48,7 +52,9 @@ export function loadSettings(): AppSettings {
       providerKeys,
       fireworksCustomModel: parsed.fireworksCustomModel || '',
       e2bApiKey: parsed.e2bApiKey || '',
+      e2bTemplate: parsed.e2bTemplate || '',
       theme: parsed.theme || loadTheme(),
+      systemPromptMode,
     };
   } catch {
     return DEFAULT_SETTINGS;

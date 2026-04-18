@@ -61,6 +61,8 @@ export interface ProviderConfig {
 
 export type ThemeMode = 'dark' | 'light';
 
+export type SystemPromptMode = 'big' | 'small';
+
 export interface AppSettings {
   apiKey: string;
   selectedModel: string;
@@ -68,7 +70,9 @@ export interface AppSettings {
   providerKeys: Record<ProviderId, string>;
   fireworksCustomModel: string;
   e2bApiKey: string;
+  e2bTemplate: string;
   theme: ThemeMode;
+  systemPromptMode: SystemPromptMode;
 }
 
 export type SandboxStatus = 'idle' | 'creating' | 'running' | 'error' | 'destroying';

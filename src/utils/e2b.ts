@@ -30,11 +30,13 @@ export function getActiveChatId(): string | null {
 }
 
 /**
- * Create a new sandbox for a specific chat
+ * Create a new sandbox for a specific chat.
+ * If a template is provided, the sandbox is created with that template.
  */
 export async function createSandboxForChat(
   apiKey: string,
-  chatId: string
+  chatId: string,
+  template?: string
 ): Promise<Sandbox> {
   // Kill existing sandbox for this chat if any
   const existing = sandboxMap.get(chatId);
@@ -46,10 +48,17 @@ export async function createSandboxForChat(
     }
   }
 
-  const sandbox = await Sandbox.create({
-    apiKey,
-    timeoutMs: 60 * 60 * 1000, // 1 hour
-  });
+  const trimmedTemplate = template?.trim();
+
+  const sandbox = trimmedTemplate
+    ? await Sandbox.create(trimmedTemplate, {
+        apiKey,
+        timeoutMs: 60 * 60 * 1000, // 1 hour
+      })
+    : await Sandbox.create({
+        apiKey,
+        timeoutMs: 60 * 60 * 1000, // 1 hour
+      });
 
   sandboxMap.set(chatId, sandbox);
   activeChatId = chatId;
@@ -60,11 +69,17 @@ export async function createSandboxForChat(
 /**
  * Legacy: create sandbox without chat association
  */
-export async function createSandbox(apiKey: string): Promise<Sandbox> {
-  const sandbox = await Sandbox.create({
-    apiKey,
-    timeoutMs: 60 * 60 * 1000,
-  });
+export async function createSandbox(apiKey: string, template?: string): Promise<Sandbox> {
+  const trimmedTemplate = template?.trim();
+  const sandbox = trimmedTemplate
+    ? await Sandbox.create(trimmedTemplate, {
+        apiKey,
+        timeoutMs: 60 * 60 * 1000,
+      })
+    : await Sandbox.create({
+        apiKey,
+        timeoutMs: 60 * 60 * 1000,
+      });
   return sandbox;
 }
 

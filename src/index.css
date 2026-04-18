@@ -2232,3 +2232,116 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ========= ITERATION COUNTER ========= */
+.iteration-counter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: 'SF Mono', Consolas, monospace;
+  letter-spacing: 0.02em;
+  transition: all 0.25s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.iteration-counter--active {
+  color: rgba(120, 180, 255, 0.9);
+  border-color: rgba(120, 180, 255, 0.3);
+  background: rgba(120, 180, 255, 0.06);
+  box-shadow: 0 0 12px rgba(120, 180, 255, 0.08);
+}
+
+.iteration-counter-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.iteration-icon-pulse {
+  animation: iterationPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes iterationPulse {
+  0%, 100% { opacity: 0.65; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+@media (max-width: 640px) {
+  .iteration-counter {
+    padding: 3px 7px;
+    font-size: 10.5px;
+  }
+}
+
+/* ========= TEMPLATE WARNING BUTTON ========= */
+.template-warning-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(255, 180, 50, 0.08);
+  border: 1px solid rgba(255, 180, 50, 0.3);
+  border-radius: 7px;
+  color: rgba(255, 180, 50, 0.95);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  animation: templateWarnPulse 2.4s ease-in-out infinite;
+}
+
+.template-warning-btn:hover {
+  background: rgba(255, 180, 50, 0.14);
+  border-color: rgba(255, 180, 50, 0.5);
+  box-shadow: 0 0 14px rgba(255, 180, 50, 0.15);
+}
+
+@keyframes templateWarnPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 180, 50, 0.15); }
+  50% { box-shadow: 0 0 0 4px rgba(255, 180, 50, 0); }
+}
+
+@media (max-width: 640px) {
+  .template-warning-btn {
+    padding: 3px 8px;
+    font-size: 10.5px;
+  }
+}
+
+/* ========= MODAL SELECT & REQUIRED LABEL ========= */
+.label-required {
+  color: rgba(255, 90, 90, 0.9);
+  margin-left: 2px;
+  font-weight: 700;
+}
+
+.modal-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 38px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  font-family: inherit;
+}
+
+.modal-select:focus {
+  border-color: var(--border-focus);
+}
+
+.modal-select option {
+  background: #1a1a1a;
+  color: #fff;
+  padding: 8px;
+}
