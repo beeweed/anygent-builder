@@ -23,7 +23,7 @@ export async function createSandbox(apiKey: string): Promise<Sandbox> {
 
   const sandbox = await Sandbox.create({
     apiKey,
-    timeoutMs: 5 * 60 * 1000,
+    timeoutMs: 60 * 60 * 1000, // 1 hour
   });
 
   activeSandbox = sandbox;
@@ -110,10 +110,10 @@ const EXCLUDE_FIND_ARGS = SYSTEM_EXCLUDES.map(
 
 /**
  * List ONLY user project files in the sandbox (no system files).
- * Scans /home/user/project by default.
+ * Scans /home/user by default to catch all user-created files.
  */
 export async function sandboxListFiles(
-  basePath: string = '/home/user/project'
+  basePath: string = '/home/user'
 ): Promise<FSNode[]> {
   if (!activeSandbox) return [];
 

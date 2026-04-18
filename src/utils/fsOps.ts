@@ -136,4 +136,43 @@ export function buildUniquePath(tree: FSNode[], parentFolder: string, name: stri
   return base + ` (${i})`;
 }
 
+/**
+ * Merge two file trees: sandbox (remote) is the primary source,
+ * but any files in `local` that are missing from `remote` are preserved.
+ * This prevents files from disappearing when the sandbox scan hasn't
+ * caught up with recently written files.
+ */
+export function mergeFileTrees(local: FSNode[], remote: FSNode[]): FSNode[] {
+  if (local.length === 0) return remote;
+  if (remote.length === 0) return local;
+
+  const remoteMap = new Map<string, FSNode>();
+  for (const n of remote) {
+    remoteMap.set(n.path, n);
+  }
+
+  const merged: FSNode[] = [...remote];
+
+  for (const localNode of local) {
+    const remoteNode = remoteMap.get(localNode.path);
+
+    if (!remoteNode) {
+      // Local node not in remote — keep it (file was just created locally)
+      merged.push(localNode);
+    } else if (localNode.kind === 'folder' && remoteNode.kind === 'folder') {
+      // Both are folders — recursively merge children
+      const idx = merged.findIndex((n) => n.path === localNode.path);
+      if (idx !== -1) {
+        merged[idx] = {
+          ...remoteNode,
+          children: mergeFileTrees(localNode.children, remoteNode.children),
+        };
+      }
+    }
+    // If both are files, remote wins (it has the latest from sandbox)
+  }
+
+  return merged.sort(sortNodes);
+}
+
 void applyToTree;

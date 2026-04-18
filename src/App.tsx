@@ -21,7 +21,7 @@ import CodeEditor from './components/CodeEditor';
 import SandboxControl from './components/SandboxControl';
 import { AppSettings, Message, ProviderId, SandboxState } from './types';
 import { FSNode, FSFile } from './types/fs';
-import { updateFileContent } from './utils/fsOps';
+import { updateFileContent, mergeFileTrees } from './utils/fsOps';
 
 const MAX_AGENT_ITERATIONS = 10;
 
@@ -214,9 +214,11 @@ export default function App() {
 
   const refreshSandboxFiles = useCallback(async () => {
     try {
-      const tree = await sandboxListFiles('/home/user/project');
-      setFsTree(tree);
-      fsTreeRef.current = tree;
+      const tree = await sandboxListFiles('/home/user');
+      // Merge: keep any locally-tracked files that sandbox scan might have missed
+      const merged = mergeFileTrees(fsTreeRef.current, tree);
+      setFsTree(merged);
+      fsTreeRef.current = merged;
     } catch {
       // Silently fail
     }
