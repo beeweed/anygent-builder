@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { X, Eye, EyeOff, Globe, Zap } from 'lucide-react';
+import { X, Eye, EyeOff, Globe, Zap, Box } from 'lucide-react';
 import { ProviderId } from '../types';
 import { PROVIDERS } from '../utils/providers';
 
 interface Props {
   providerKeys: Record<ProviderId, string>;
-  onSave: (keys: Record<ProviderId, string>) => void;
+  e2bApiKey: string;
+  onSave: (keys: Record<ProviderId, string>, e2bKey: string) => void;
   onClose: () => void;
 }
 
@@ -14,11 +15,13 @@ const PROVIDER_ICONS: Record<ProviderId, React.ReactNode> = {
   fireworks: <Zap size={14} />,
 };
 
-export default function SettingsModal({ providerKeys, onSave, onClose }: Props) {
+export default function SettingsModal({ providerKeys, e2bApiKey, onSave, onClose }: Props) {
   const [keys, setKeys] = useState<Record<ProviderId, string>>({ ...providerKeys });
-  const [showKeys, setShowKeys] = useState<Record<ProviderId, boolean>>({
+  const [e2bKey, setE2bKey] = useState(e2bApiKey);
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({
     openrouter: false,
     fireworks: false,
+    e2b: false,
   });
 
   useEffect(() => {
@@ -34,7 +37,7 @@ export default function SettingsModal({ providerKeys, onSave, onClose }: Props) 
       openrouter: keys.openrouter.trim(),
       fireworks: keys.fireworks.trim(),
     };
-    onSave(trimmed);
+    onSave(trimmed, e2bKey.trim());
     onClose();
   };
 
@@ -85,6 +88,51 @@ export default function SettingsModal({ providerKeys, onSave, onClose }: Props) 
               </div>
             </div>
           ))}
+
+          {/* E2B API Key Section */}
+          <div className="provider-key-section provider-key-section--e2b">
+            <label className="modal-label">
+              <Box size={14} />
+              E2B Sandbox API Key
+            </label>
+            <p className="provider-desc">
+              Cloud sandbox for code execution. Get your key at{' '}
+              <a
+                href="https://e2b.dev/dashboard"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="settings-link"
+              >
+                e2b.dev/dashboard
+              </a>
+            </p>
+            <div className="modal-input-wrapper">
+              <input
+                type={showKeys.e2b ? 'text' : 'password'}
+                value={e2bKey}
+                onChange={(e) => setE2bKey(e.target.value)}
+                placeholder="e2b_..."
+                className="modal-input"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSave();
+                }}
+              />
+              <button
+                type="button"
+                className="modal-eye-btn"
+                onClick={() =>
+                  setShowKeys((prev) => ({
+                    ...prev,
+                    e2b: !prev.e2b,
+                  }))
+                }
+                title={showKeys.e2b ? 'Hide key' : 'Show key'}
+              >
+                {showKeys.e2b ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
           <p className="modal-hint">
             Your API keys are stored locally in your browser and never sent anywhere except their
             respective providers.

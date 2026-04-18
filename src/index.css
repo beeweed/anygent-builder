@@ -1869,6 +1869,202 @@ body {
   margin-bottom: 2px;
 }
 
+/* ========= SANDBOX CONTROL BAR ========= */
+
+.sandbox-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.sandbox-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.sandbox-bar--creating .sandbox-bar-inner {
+  border-color: rgba(120, 180, 255, 0.2);
+  background: rgba(120, 180, 255, 0.04);
+}
+
+.sandbox-bar--running .sandbox-bar-inner {
+  border-color: rgba(80, 200, 120, 0.2);
+  background: rgba(80, 200, 120, 0.04);
+}
+
+.sandbox-bar--error .sandbox-bar-inner {
+  border-color: rgba(255, 90, 90, 0.2);
+  background: rgba(255, 90, 90, 0.04);
+}
+
+.sandbox-bar--destroying .sandbox-bar-inner {
+  border-color: rgba(255, 180, 50, 0.2);
+  background: rgba(255, 180, 50, 0.04);
+}
+
+.sandbox-icon {
+  flex-shrink: 0;
+}
+
+.sandbox-icon--idle {
+  color: rgba(255,255,255,0.25);
+}
+
+.sandbox-icon--spin {
+  animation: agentSpinner 1s linear infinite;
+  color: rgba(120, 180, 255, 0.7);
+}
+
+.sandbox-icon--error {
+  color: rgba(255, 90, 90, 0.7);
+}
+
+.sandbox-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(80, 200, 120, 0.8);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(80, 200, 120, 0.4);
+  animation: sandboxPulse 2s ease-in-out infinite;
+}
+
+@keyframes sandboxPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.sandbox-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.55);
+  white-space: nowrap;
+}
+
+.sandbox-label--dim {
+  color: rgba(255,255,255,0.25);
+}
+
+.sandbox-label--creating {
+  color: rgba(120, 180, 255, 0.7);
+}
+
+.sandbox-label--running {
+  color: rgba(80, 200, 120, 0.75);
+}
+
+.sandbox-label--error {
+  color: rgba(255, 90, 90, 0.7);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sandbox-id {
+  font-size: 10px;
+  font-family: 'SF Mono', Consolas, monospace;
+  color: rgba(255,255,255,0.2);
+  letter-spacing: 0.02em;
+}
+
+.sandbox-actions-group {
+  display: flex;
+  gap: 3px;
+  margin-left: 2px;
+}
+
+.sandbox-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: rgba(255,255,255,0.45);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.sandbox-action-btn:hover {
+  color: rgba(255,255,255,0.85);
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.18);
+}
+
+.sandbox-action-btn--create {
+  color: rgba(80, 200, 120, 0.8);
+  border-color: rgba(80, 200, 120, 0.2);
+  background: rgba(80, 200, 120, 0.06);
+}
+
+.sandbox-action-btn--create:hover {
+  color: rgba(80, 200, 120, 1);
+  background: rgba(80, 200, 120, 0.12);
+  border-color: rgba(80, 200, 120, 0.35);
+}
+
+.sandbox-action-btn--small {
+  padding: 3px 5px;
+}
+
+.sandbox-action-btn--destroy {
+  color: rgba(255, 90, 90, 0.6);
+  border-color: rgba(255, 90, 90, 0.15);
+  background: rgba(255, 90, 90, 0.04);
+  padding: 3px 5px;
+}
+
+.sandbox-action-btn--destroy:hover {
+  color: rgba(255, 90, 90, 0.9);
+  background: rgba(255, 90, 90, 0.1);
+  border-color: rgba(255, 90, 90, 0.3);
+}
+
+.settings-link {
+  color: rgba(120, 180, 255, 0.8);
+  text-decoration: underline;
+  text-decoration-color: rgba(120, 180, 255, 0.3);
+  text-underline-offset: 2px;
+  transition: color 0.15s;
+}
+
+.settings-link:hover {
+  color: rgba(120, 180, 255, 1);
+}
+
+.provider-key-section--e2b {
+  border-color: rgba(120, 180, 255, 0.1);
+  background: rgba(120, 180, 255, 0.02);
+}
+
+@media (max-width: 640px) {
+  .sandbox-bar-inner {
+    padding: 3px 7px;
+    gap: 5px;
+  }
+  .sandbox-label {
+    font-size: 10.5px;
+  }
+  .sandbox-id {
+    display: none;
+  }
+  .sandbox-action-btn span {
+    display: none;
+  }
+}
+
 /* ========= AGENT TOOL CALL BLOCKS ========= */
 
 @keyframes agentToolSlideIn {

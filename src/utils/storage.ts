@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   selectedProvider: 'openrouter',
   providerKeys: { openrouter: '', fireworks: '' },
   fireworksCustomModel: '',
+  e2bApiKey: '',
 };
 
 export function loadChats(): Chat[] {
@@ -46,6 +47,7 @@ export function loadSettings(): AppSettings {
       selectedProvider: parsed.selectedProvider || 'openrouter',
       providerKeys,
       fireworksCustomModel: parsed.fireworksCustomModel || '',
+      e2bApiKey: parsed.e2bApiKey || '',
     };
   } catch {
     return DEFAULT_SETTINGS;

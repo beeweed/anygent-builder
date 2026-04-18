@@ -64,4 +64,13 @@ export interface AppSettings {
   selectedProvider: ProviderId;
   providerKeys: Record<ProviderId, string>;
   fireworksCustomModel: string;
+  e2bApiKey: string;
+}
+
+export type SandboxStatus = 'idle' | 'creating' | 'running' | 'error' | 'destroying';
+
+export interface SandboxState {
+  status: SandboxStatus;
+  sandboxId: string | null;
+  error: string | null;
 }

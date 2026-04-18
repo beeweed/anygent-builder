@@ -5,13 +5,15 @@ import { useModels } from './hooks/useModels';
 import { loadSettings, saveSettings, generateId } from './utils/storage';
 import { agentCompletion } from './utils/api';
 import { executeToolCall, ToolExecutionContext } from './utils/tools';
+import { createSandbox, destroySandbox, sandboxListFiles, sandboxReadFileForEditor } from './utils/e2b';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputBox from './components/InputBox';
 import SettingsModal from './components/SettingsModal';
 import FileExplorer from './components/FileExplorer';
 import CodeEditor from './components/CodeEditor';
-import { AppSettings, Message, ProviderId } from './types';
+import SandboxControl from './components/SandboxControl';
+import { AppSettings, Message, ProviderId, SandboxState } from './types';
 import { FSNode, FSFile } from './types/fs';
 import { updateFileContent } from './utils/fsOps';
 
@@ -64,6 +66,13 @@ export default function App() {
   const [activeFile, setActiveFile] = useState<FSFile | null>(null);
   const [mobileIdeOpen, setMobileIdeOpen] = useState(false);
 
+  // E2B Sandbox state
+  const [sandboxState, setSandboxState] = useState<SandboxState>({
+    status: 'idle',
+    sandboxId: null,
+    error: null,
+  });
+
   // Ref to always have latest fsTree for tool execution
   const fsTreeRef = useRef<FSNode[]>(fsTree);
   useEffect(() => {
@@ -109,12 +118,13 @@ export default function App() {
   }, [models, selectedModel, settings, selectedProvider]);
 
   const handleSaveSettings = useCallback(
-    (keys: Record<ProviderId, string>) => {
+    (keys: Record<ProviderId, string>, e2bKey: string) => {
       const currentKey = keys[selectedProvider];
       const updated: AppSettings = {
         ...settings,
         apiKey: currentKey,
         providerKeys: keys,
+        e2bApiKey: e2bKey,
       };
       setSettings(updated);
       saveSettings(updated);
@@ -167,6 +177,56 @@ export default function App() {
     },
     [settings]
   );
+
+  // ─── Sandbox Controls ───────────────────────────────────────────────────
+
+  const refreshSandboxFiles = useCallback(async () => {
+    try {
+      const tree = await sandboxListFiles('/home/user');
+      setFsTree(tree);
+      fsTreeRef.current = tree;
+    } catch {
+      // Silently fail - sandbox might be gone
+    }
+  }, []);
+
+  const handleCreateSandbox = useCallback(async () => {
+    if (!settings.e2bApiKey) {
+      setSettingsOpen(true);
+      return;
+    }
+
+    setSandboxState({ status: 'creating', sandboxId: null, error: null });
+
+    try {
+      const sandbox = await createSandbox(settings.e2bApiKey);
+      setSandboxState({
+        status: 'running',
+        sandboxId: sandbox.sandboxId,
+        error: null,
+      });
+      // Refresh file tree from sandbox
+      await refreshSandboxFiles();
+    } catch (err) {
+      setSandboxState({
+        status: 'error',
+        sandboxId: null,
+        error: err instanceof Error ? err.message : 'Failed to create sandbox',
+      });
+    }
+  }, [settings.e2bApiKey, refreshSandboxFiles]);
+
+  const handleDestroySandbox = useCallback(async () => {
+    setSandboxState({ status: 'destroying', sandboxId: null, error: null });
+    try {
+      await destroySandbox();
+    } catch {
+      // ignore
+    }
+    setSandboxState({ status: 'idle', sandboxId: null, error: null });
+    setFsTree([]);
+    setActiveFile(null);
+  }, []);
 
   // ─── Agent Send (ReAct Loop) ──────────────────────────────────────────────
 
@@ -281,7 +341,7 @@ export default function App() {
               },
             };
 
-            const toolResult = executeToolCall(tc, context);
+            const toolResult = await executeToolCall(tc, context);
 
             const toolMsg: Message = {
               id: generateId(),
@@ -299,6 +359,11 @@ export default function App() {
 
           // Add all tool result messages to the chat
           addMessages(chatId, toolResultMessages);
+
+          // After tool execution, refresh sandbox file tree
+          if (sandboxState.status === 'running') {
+            await refreshSandboxFiles();
+          }
 
           setStreamingMsgId(null);
         }
@@ -325,6 +390,8 @@ export default function App() {
       addMessages,
       updateLastAssistantMessage,
       finalizeAssistantMessage,
+      sandboxState.status,
+      refreshSandboxFiles,
     ]
   );
 
@@ -362,13 +429,39 @@ export default function App() {
   const currentApiKey = settings.providerKeys[selectedProvider];
   const effectiveModel = activeChat?.model || selectedModel;
 
-  const handleOpenFile = useCallback((file: FSFile) => {
-    setActiveFile(file);
-  }, []);
+  const handleOpenFile = useCallback(
+    async (file: FSFile) => {
+      // If sandbox is running, load content from sandbox
+      if (sandboxState.status === 'running' && !file.content) {
+        try {
+          const content = await sandboxReadFileForEditor(file.path);
+          const enrichedFile = { ...file, content };
+          setActiveFile(enrichedFile);
+          return;
+        } catch {
+          // Fall through to use local content
+        }
+      }
+      setActiveFile(file);
+    },
+    [sandboxState.status]
+  );
 
-  const handleMobileOpenFile = useCallback((file: FSFile) => {
-    setActiveFile(file);
-  }, []);
+  const handleMobileOpenFile = useCallback(
+    async (file: FSFile) => {
+      if (sandboxState.status === 'running' && !file.content) {
+        try {
+          const content = await sandboxReadFileForEditor(file.path);
+          setActiveFile({ ...file, content });
+          return;
+        } catch {
+          // Fall through
+        }
+      }
+      setActiveFile(file);
+    },
+    [sandboxState.status]
+  );
 
   const handleTreeChange = useCallback((tree: FSNode[]) => {
     setFsTree(tree);
@@ -427,6 +520,16 @@ export default function App() {
           </button>
           <span className="app-logo">anygent builder</span>
           <div className="header-spacer" />
+
+          <SandboxControl
+            sandboxState={sandboxState}
+            hasE2bKey={!!settings.e2bApiKey}
+            onCreateSandbox={handleCreateSandbox}
+            onDestroySandbox={handleDestroySandbox}
+            onRefreshFiles={refreshSandboxFiles}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+
           <button
             className={`mobile-ide-btn${mobileIdeOpen ? ' mobile-ide-btn--active' : ''}`}
             onClick={() => setMobileIdeOpen((v) => !v)}
@@ -494,6 +597,7 @@ export default function App() {
       {settingsOpen && (
         <SettingsModal
           providerKeys={settings.providerKeys}
+          e2bApiKey={settings.e2bApiKey}
           onSave={handleSaveSettings}
           onClose={() => setSettingsOpen(false)}
         />

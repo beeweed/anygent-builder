@@ -1,5 +1,6 @@
 import { ToolCall, ToolResult } from '../types';
 import { FSNode, FSFile } from '../types/fs';
+import { sandboxWriteFile, sandboxRunCommand, getActiveSandbox } from './e2b';
 
 // ─── Tool Definitions (sent to the LLM API) ────────────────────────────────
 
@@ -24,6 +25,28 @@ export const TOOL_DEFINITIONS = [
           },
         },
         required: ['file_path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'shell_exec',
+      description:
+        'Execute a shell command in the sandbox. Use for installing packages, running builds, starting servers, etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: 'The shell command to execute. Example: npm install express',
+          },
+          cwd: {
+            type: 'string',
+            description: 'Working directory for the command. Defaults to /home/user/project',
+          },
+        },
+        required: ['command'],
       },
     },
   },
@@ -53,8 +76,6 @@ function validateFilePath(filePath: string): string | null {
 }
 
 // ─── FS Tree helpers ────────────────────────────────────────────────────────
-
-
 
 function buildPathParts(filePath: string): { folders: string[]; fileName: string } {
   const relative = filePath.slice(SANDBOX_PREFIX.length); // e.g. "project/src/App.tsx"
@@ -131,14 +152,18 @@ export interface ToolExecutionContext {
   onFileCreated?: (file: FSFile) => void;
 }
 
-export function executeToolCall(
+export async function executeToolCall(
   toolCall: ToolCall,
   context: ToolExecutionContext
-): ToolResult {
+): Promise<ToolResult> {
   const { function: fn } = toolCall;
 
   if (fn.name === 'file_write') {
     return executeFileWrite(toolCall, context);
+  }
+
+  if (fn.name === 'shell_exec') {
+    return executeShellExec(toolCall);
   }
 
   return {
@@ -149,10 +174,10 @@ export function executeToolCall(
   };
 }
 
-function executeFileWrite(
+async function executeFileWrite(
   toolCall: ToolCall,
   context: ToolExecutionContext
-): ToolResult {
+): Promise<ToolResult> {
   const { id, function: fn } = toolCall;
 
   let args: { file_path?: string; content?: string };
@@ -191,8 +216,14 @@ function executeFileWrite(
     };
   }
 
-  // Execute the write
   try {
+    // Write to E2B sandbox if available, otherwise local only
+    const sandbox = getActiveSandbox();
+    if (sandbox) {
+      await sandboxWriteFile(file_path!, content as string);
+    }
+
+    // Also update local FS tree for UI
     const { folders, fileName } = buildPathParts(file_path!);
     const newTree = insertFileInTree(
       context.fsTree,
@@ -213,10 +244,11 @@ function executeFileWrite(
       });
     }
 
+    const target = sandbox ? 'sandbox' : 'local';
     return {
       tool_call_id: id,
       name: 'file_write',
-      result: `Successfully wrote ${(content as string).length} bytes to ${file_path}`,
+      result: `Successfully wrote ${(content as string).length} bytes to ${file_path} (${target})`,
       success: true,
       file_path: file_path,
     };
@@ -227,6 +259,68 @@ function executeFileWrite(
       result: `Error writing file: ${err instanceof Error ? err.message : 'Unknown error'}`,
       success: false,
       file_path: file_path,
+    };
+  }
+}
+
+async function executeShellExec(toolCall: ToolCall): Promise<ToolResult> {
+  const { id, function: fn } = toolCall;
+
+  let args: { command?: string; cwd?: string };
+  try {
+    args = JSON.parse(fn.arguments);
+  } catch {
+    return {
+      tool_call_id: id,
+      name: 'shell_exec',
+      result: 'Error: Invalid JSON in tool arguments.',
+      success: false,
+    };
+  }
+
+  const { command, cwd } = args;
+
+  if (!command || typeof command !== 'string') {
+    return {
+      tool_call_id: id,
+      name: 'shell_exec',
+      result: 'Error: command is required and must be a non-empty string.',
+      success: false,
+    };
+  }
+
+  const sandbox = getActiveSandbox();
+  if (!sandbox) {
+    return {
+      tool_call_id: id,
+      name: 'shell_exec',
+      result: 'Error: No active sandbox. Please create a sandbox first.',
+      success: false,
+    };
+  }
+
+  try {
+    const result = await sandboxRunCommand(command, cwd);
+    const output = [
+      result.stdout ? `stdout:\n${result.stdout}` : '',
+      result.stderr ? `stderr:\n${result.stderr}` : '',
+      `exit code: ${result.exitCode}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    return {
+      tool_call_id: id,
+      name: 'shell_exec',
+      result: output.slice(0, 4000), // Truncate long output
+      success: result.exitCode === 0,
+    };
+  } catch (err) {
+    return {
+      tool_call_id: id,
+      name: 'shell_exec',
+      result: `Error executing command: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      success: false,
     };
   }
 }
