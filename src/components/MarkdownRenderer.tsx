@@ -174,7 +174,7 @@ interface ListItem {
   ordered: boolean;
 }
 
-function parseList(lines: string[], startIdx: number, baseIndent: number, _ordered: boolean): [ListItem[], number] {
+function parseList(lines: string[], startIdx: number, baseIndent: number): [ListItem[], number] {
   const items: ListItem[] = [];
   let i = startIdx;
 
@@ -203,8 +203,7 @@ function parseList(lines: string[], startIdx: number, baseIndent: number, _order
       const nextIndentMatch = lines[i].match(/^(\s*)/);
       const nextIndent = nextIndentMatch ? nextIndentMatch[1].length : 0;
       if (nextIndent > itemIndent) {
-        const nextIsOl = /^\s*\d+\. /.test(lines[i]);
-        [children, i] = parseList(lines, i, nextIndent, nextIsOl);
+        [children, i] = parseList(lines, i, nextIndent);
       }
     }
 
@@ -343,7 +342,7 @@ export default function MarkdownRenderer({ content }: Props) {
 
     // ── Unordered list ──
     if (/^(\s*)[-*+] /.test(line)) {
-      const [items, nextI] = parseList(lines, i, 0, false);
+      const [items, nextI] = parseList(lines, i, 0);
       i = nextI;
       elements.push(
         <ul key={k++} className="md-ul">
@@ -355,7 +354,7 @@ export default function MarkdownRenderer({ content }: Props) {
 
     // ── Ordered list ──
     if (/^(\s*)\d+\. /.test(line)) {
-      const [items, nextI] = parseList(lines, i, 0, true);
+      const [items, nextI] = parseList(lines, i, 0);
       i = nextI;
       elements.push(
         <ol key={k++} className="md-ol">

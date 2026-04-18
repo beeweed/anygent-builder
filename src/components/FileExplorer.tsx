@@ -12,7 +12,6 @@ interface Props {
 }
 
 function fileIcon(name: string) {
-  const ext = name.split('.').pop()?.toLowerCase() ?? '';
   const lang = getLanguage(name);
   const colors: Record<string, string> = {
     javascript: '#f0db4f', typescript: '#3178c6', json: '#cbcb41',
@@ -20,7 +19,6 @@ function fileIcon(name: string) {
     go: '#00add8', rust: '#dea584', markdown: '#fff',
     shell: '#89e051', yaml: '#cb171e', xml: '#e34c26', sql: '#e38c00',
   };
-  void ext;
   return colors[lang] ?? 'rgba(255,255,255,0.4)';
 }
 
@@ -178,7 +176,11 @@ export default function FileExplorer({ tree, activeFilePath, onOpenFile, onTreeC
   const toggle = (path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(path) ? next.delete(path) : next.add(path);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
       return next;
     });
   };

@@ -41,7 +41,6 @@ export default function App() {
     addMessages,
     updateLastAssistantMessage,
     finalizeAssistantMessage,
-    getMessages,
     updateChatModel,
     updateChatProvider,
   } = useChats();
@@ -213,6 +212,8 @@ export default function App() {
           setStreamingMsgId(assistantMsgId);
           streamBufferRef.current = '';
 
+          let hadError = false;
+
           // Call the LLM with tools
           const result = await agentCompletion(
             currentKey,
@@ -230,14 +231,21 @@ export default function App() {
               },
               onDone: () => {},
               onError: (err) => {
-                const errContent = `Error: ${err}`;
+                hadError = true;
+                const errContent = `⚠️ ${err}`;
                 if (streamChatIdRef.current) {
                   finalizeAssistantMessage(streamChatIdRef.current, errContent);
                 }
               },
             },
-            selectedProvider
+            selectedProvider,
+            true // enable tools
           );
+
+          // If there was an error, stop the loop
+          if (hadError) {
+            break;
+          }
 
           const { content: responseContent, toolCalls } = result;
 
@@ -295,7 +303,7 @@ export default function App() {
           setStreamingMsgId(null);
         }
       } catch (err) {
-        const errContent = `Error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+        const errContent = `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`;
         if (streamChatIdRef.current) {
           finalizeAssistantMessage(streamChatIdRef.current, errContent);
         }
@@ -317,7 +325,6 @@ export default function App() {
       addMessages,
       updateLastAssistantMessage,
       finalizeAssistantMessage,
-      getMessages,
     ]
   );
 

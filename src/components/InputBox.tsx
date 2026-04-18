@@ -52,6 +52,17 @@ export default function InputBox({
     }
   }, [value, disabled, onSend]);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Enter to send, Shift+Enter for new line
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend]
+  );
+
   const canSend = value.trim().length > 0 && !disabled && !!apiKey;
 
   return (
@@ -74,10 +85,11 @@ export default function InputBox({
             ref={textareaRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKeyDown}
             placeholder={
               !apiKey
                 ? 'Add your API key in Settings to start chatting...'
-                : 'Message Anygent Builder...'
+                : 'Message Anygent Builder... (Enter to send, Shift+Enter for new line)'
             }
             className="chat-textarea"
             rows={1}
@@ -102,7 +114,11 @@ export default function InputBox({
           </div>
         </div>
         <p className="input-hint">
-          {disabled ? 'Waiting for response...' : 'Click Send to submit'}
+          {!apiKey
+            ? 'Click the ⚙ Settings button to add your API key'
+            : disabled
+              ? 'Waiting for response...'
+              : 'Enter to send · Shift+Enter for new line'}
         </p>
       </div>
     </div>
