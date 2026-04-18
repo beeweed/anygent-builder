@@ -25,7 +25,7 @@ import { AppSettings, Message, ProviderId, SandboxState, SystemPromptMode, Theme
 import { FSNode, FSFile } from './types/fs';
 import { updateFileContent, mergeFileTrees } from './utils/fsOps';
 
-const MAX_AGENT_ITERATIONS = 87;
+const MAX_AGENT_ITERATIONS = 1000;
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
