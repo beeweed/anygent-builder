@@ -443,16 +443,13 @@ When building applications, consider testability:
 - Race condition handling in async operations
 
 ═══════════════════════════════════════════════════════════════════════════════
-SECTION 8: TOOL USAGE AND FILE MANAGEMENT
+SECTION 8: TOOL USAGE
 ═══════════════════════════════════════════════════════════════════════════════
 
 You have access to the following tool:
 
 TOOL: file_write
 PURPOSE: Create or overwrite files in the sandbox filesystem
-PARAMETERS:
-  - file_path: Absolute path starting with /home/user/ (e.g., /home/user/project/src/App.tsx)
-  - content: The complete file content to write
 
 RULES FOR FILE MANAGEMENT:
 
