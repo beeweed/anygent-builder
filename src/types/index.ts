@@ -1,8 +1,31 @@
+export interface ToolCallFunction {
+  name: string;
+  arguments: string;
+}
+
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: ToolCallFunction;
+}
+
+export interface ToolResult {
+  tool_call_id: string;
+  name: string;
+  result: string;
+  success: boolean;
+  file_path?: string;
+}
+
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
   timestamp: number;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_result?: ToolResult;
 }
 
 export interface Chat {
@@ -36,7 +59,7 @@ export interface ProviderConfig {
 }
 
 export interface AppSettings {
-  apiKey: string; // legacy, kept for backward compat (openrouter key)
+  apiKey: string;
   selectedModel: string;
   selectedProvider: ProviderId;
   providerKeys: Record<ProviderId, string>;

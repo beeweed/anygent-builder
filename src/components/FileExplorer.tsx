@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Plus, FolderPlus, Trash2, Pencil, Check, X } from 'lucide-react';
 import { FSNode, FSFile } from '../types/fs';
-import { findNode, deleteNode, renameNode, insertNode, buildUniquePath } from '../utils/fsOps';
+import { deleteNode, renameNode, insertNode, buildUniquePath } from '../utils/fsOps';
 import { getLanguage } from '../utils/fsOps';
 
 interface Props {

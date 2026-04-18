@@ -66,6 +66,18 @@ export function useChats() {
     });
   }, []);
 
+  const addMessages = useCallback((chatId: string, newMessages: Message[]) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const messages = [...c.messages, ...newMessages];
+        return { ...c, messages, updatedAt: Date.now() };
+      });
+      saveChats(updated);
+      return updated;
+    });
+  }, []);
+
   const updateLastAssistantMessage = useCallback((chatId: string, content: string) => {
     setChats((prev) => {
       const updated = prev.map((c) => {
@@ -82,21 +94,36 @@ export function useChats() {
     });
   }, []);
 
-  const finalizeAssistantMessage = useCallback((chatId: string, content: string) => {
-    setChats((prev) => {
-      const updated = prev.map((c) => {
-        if (c.id !== chatId) return c;
-        const messages = [...c.messages];
-        const lastIdx = messages.length - 1;
-        if (lastIdx >= 0 && messages[lastIdx].role === 'assistant') {
-          messages[lastIdx] = { ...messages[lastIdx], content };
-        }
-        return { ...c, messages, updatedAt: Date.now() };
+  const finalizeAssistantMessage = useCallback(
+    (chatId: string, content: string, toolCalls?: Message['tool_calls']) => {
+      setChats((prev) => {
+        const updated = prev.map((c) => {
+          if (c.id !== chatId) return c;
+          const messages = [...c.messages];
+          const lastIdx = messages.length - 1;
+          if (lastIdx >= 0 && messages[lastIdx].role === 'assistant') {
+            messages[lastIdx] = {
+              ...messages[lastIdx],
+              content,
+              ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+            };
+          }
+          return { ...c, messages, updatedAt: Date.now() };
+        });
+        saveChats(updated);
+        return updated;
       });
-      saveChats(updated);
-      return updated;
-    });
-  }, []);
+    },
+    []
+  );
+
+  const getMessages = useCallback(
+    (chatId: string): Message[] => {
+      const chat = chats.find((c) => c.id === chatId);
+      return chat?.messages ?? [];
+    },
+    [chats]
+  );
 
   const updateChatModel = useCallback((chatId: string, model: string) => {
     setChats((prev) => {
@@ -125,8 +152,10 @@ export function useChats() {
     deleteChat,
     renameChat,
     addMessage,
+    addMessages,
     updateLastAssistantMessage,
     finalizeAssistantMessage,
+    getMessages,
     updateChatModel,
     updateChatProvider,
   };

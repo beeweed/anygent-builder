@@ -3,7 +3,8 @@ import { Menu, Code2 } from 'lucide-react';
 import { useChats } from './hooks/useChats';
 import { useModels } from './hooks/useModels';
 import { loadSettings, saveSettings, generateId } from './utils/storage';
-import { streamCompletion } from './utils/api';
+import { agentCompletion } from './utils/api';
+import { executeToolCall, ToolExecutionContext } from './utils/tools';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputBox from './components/InputBox';
@@ -13,6 +14,8 @@ import CodeEditor from './components/CodeEditor';
 import { AppSettings, Message, ProviderId } from './types';
 import { FSNode, FSFile } from './types/fs';
 import { updateFileContent } from './utils/fsOps';
+
+const MAX_AGENT_ITERATIONS = 10;
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -35,8 +38,10 @@ export default function App() {
     deleteChat,
     renameChat,
     addMessage,
+    addMessages,
     updateLastAssistantMessage,
     finalizeAssistantMessage,
+    getMessages,
     updateChatModel,
     updateChatProvider,
   } = useChats();
@@ -59,6 +64,12 @@ export default function App() {
   const [fsTree, setFsTree] = useState<FSNode[]>([]);
   const [activeFile, setActiveFile] = useState<FSFile | null>(null);
   const [mobileIdeOpen, setMobileIdeOpen] = useState(false);
+
+  // Ref to always have latest fsTree for tool execution
+  const fsTreeRef = useRef<FSNode[]>(fsTree);
+  useEffect(() => {
+    fsTreeRef.current = fsTree;
+  }, [fsTree]);
 
   useEffect(() => {
     setSidebarOpen(isDesktop);
@@ -158,6 +169,8 @@ export default function App() {
     [settings]
   );
 
+  // ─── Agent Send (ReAct Loop) ──────────────────────────────────────────────
+
   const handleSend = useCallback(
     async (content: string) => {
       const currentKey = settings.providerKeys[selectedProvider];
@@ -170,60 +183,127 @@ export default function App() {
         chatId = createChat(selectedModel, selectedProvider);
       }
 
+      // Add user message
       const userMsg: Message = {
         id: generateId(),
         role: 'user',
         content,
         timestamp: Date.now(),
       };
-
-      const assistantMsgId = generateId();
-      const assistantMsg: Message = {
-        id: assistantMsgId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-      };
-
       addMessage(chatId, userMsg);
-      addMessage(chatId, assistantMsg);
 
-      setStreamingMsgId(assistantMsgId);
-      streamChatIdRef.current = chatId;
-      streamBufferRef.current = '';
+      // Build history for the agent
+      let history: Message[] = [...priorMessages, userMsg];
+
       setStreaming(true);
+      streamChatIdRef.current = chatId;
 
-      const history: Message[] = [...priorMessages, userMsg];
+      try {
+        // ReAct loop: keep iterating until the model responds without tool calls
+        for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
+          // Create a placeholder assistant message for streaming
+          const assistantMsgId = generateId();
+          const assistantMsg: Message = {
+            id: assistantMsgId,
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+          };
+          addMessage(chatId, assistantMsg);
+          setStreamingMsgId(assistantMsgId);
+          streamBufferRef.current = '';
 
-      await streamCompletion(
-        currentKey,
-        selectedModel,
-        history,
-        (token) => {
-          streamBufferRef.current += token;
-          if (streamChatIdRef.current) {
-            updateLastAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
+          // Call the LLM with tools
+          const result = await agentCompletion(
+            currentKey,
+            selectedModel,
+            history,
+            {
+              onToken: (token) => {
+                streamBufferRef.current += token;
+                if (streamChatIdRef.current) {
+                  updateLastAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
+                }
+              },
+              onToolCall: () => {
+                // Tool calls are handled after completion
+              },
+              onDone: () => {},
+              onError: (err) => {
+                const errContent = `Error: ${err}`;
+                if (streamChatIdRef.current) {
+                  finalizeAssistantMessage(streamChatIdRef.current, errContent);
+                }
+              },
+            },
+            selectedProvider
+          );
+
+          const { content: responseContent, toolCalls } = result;
+
+          // Finalize the assistant message
+          finalizeAssistantMessage(chatId, responseContent, toolCalls);
+
+          // If no tool calls, we're done - the model gave a final answer
+          if (!toolCalls || toolCalls.length === 0) {
+            break;
           }
-        },
-        () => {
-          if (streamChatIdRef.current) {
-            finalizeAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
+
+          // Add the assistant message (with tool_calls) to history
+          const assistantHistoryMsg: Message = {
+            id: assistantMsgId,
+            role: 'assistant',
+            content: responseContent,
+            timestamp: Date.now(),
+            tool_calls: toolCalls,
+          };
+          history = [...history, assistantHistoryMsg];
+
+          // Execute each tool call and add results to history + chat
+          const toolResultMessages: Message[] = [];
+          for (const tc of toolCalls) {
+            const context: ToolExecutionContext = {
+              fsTree: fsTreeRef.current,
+              onTreeChange: (newTree) => {
+                setFsTree(newTree);
+                fsTreeRef.current = newTree;
+              },
+              onFileCreated: (file) => {
+                setActiveFile(file);
+              },
+            };
+
+            const toolResult = executeToolCall(tc, context);
+
+            const toolMsg: Message = {
+              id: generateId(),
+              role: 'tool',
+              content: toolResult.result,
+              timestamp: Date.now(),
+              tool_call_id: tc.id,
+              tool_name: toolResult.name,
+              tool_result: toolResult,
+            };
+
+            toolResultMessages.push(toolMsg);
+            history = [...history, toolMsg];
           }
-          setStreaming(false);
+
+          // Add all tool result messages to the chat
+          addMessages(chatId, toolResultMessages);
+
           setStreamingMsgId(null);
-          streamChatIdRef.current = null;
-        },
-        (err) => {
-          const errContent = `Error: ${err}`;
-          if (streamChatIdRef.current) {
-            finalizeAssistantMessage(streamChatIdRef.current, errContent);
-          }
-          setStreaming(false);
-          setStreamingMsgId(null);
-          streamChatIdRef.current = null;
-        },
-        selectedProvider
-      );
+        }
+      } catch (err) {
+        const errContent = `Error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+        if (streamChatIdRef.current) {
+          finalizeAssistantMessage(streamChatIdRef.current, errContent);
+        }
+      } finally {
+        setStreaming(false);
+        setStreamingMsgId(null);
+        streamChatIdRef.current = null;
+      }
     },
     [
       settings.providerKeys,
@@ -234,8 +314,10 @@ export default function App() {
       activeChat,
       createChat,
       addMessage,
+      addMessages,
       updateLastAssistantMessage,
       finalizeAssistantMessage,
+      getMessages,
     ]
   );
 
@@ -247,7 +329,6 @@ export default function App() {
   const handleSelectChat = useCallback(
     (id: string) => {
       setActiveChatId(id);
-      // When switching to a chat, load its provider and model
       const chat = chats.find((c) => c.id === id);
       if (chat) {
         if (chat.provider && chat.provider !== selectedProvider) {

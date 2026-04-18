@@ -54,7 +54,7 @@ function highlightCode(code: string, lang: string): string {
   // Keywords (only if not already inside a span)
   if (kws.length > 0) {
     const kwRx = new RegExp(`(?<!<[^>]*)\\b(${kws.join('|')})\\b`, 'g');
-    out = out.replace(kwRx, (m, kw) => `<span class="hl-kw">${kw}</span>`);
+    out = out.replace(kwRx, (_m, kw) => `<span class="hl-kw">${kw}</span>`);
   }
 
   // Numbers
@@ -174,7 +174,7 @@ interface ListItem {
   ordered: boolean;
 }
 
-function parseList(lines: string[], startIdx: number, baseIndent: number, ordered: boolean): [ListItem[], number] {
+function parseList(lines: string[], startIdx: number, baseIndent: number, _ordered: boolean): [ListItem[], number] {
   const items: ListItem[] = [];
   let i = startIdx;
 
