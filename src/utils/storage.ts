@@ -1,7 +1,8 @@
-import { Chat, AppSettings, ProviderId } from '../types';
+import { Chat, AppSettings, ProviderId, ThemeMode } from '../types';
 
 const CHATS_KEY = 'anygent_chats';
 const SETTINGS_KEY = 'anygent_settings';
+const THEME_KEY = 'anygent_theme';
 
 const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
@@ -10,6 +11,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   providerKeys: { openrouter: '', fireworks: '' },
   fireworksCustomModel: '',
   e2bApiKey: '',
+  theme: 'dark',
 };
 
 export function loadChats(): Chat[] {
@@ -17,7 +19,6 @@ export function loadChats(): Chat[] {
     const raw = localStorage.getItem(CHATS_KEY);
     if (!raw) return [];
     const chats = JSON.parse(raw) as Chat[];
-    // Migrate old chats that don't have a provider field
     return chats.map((c) => ({
       ...c,
       provider: c.provider || 'openrouter',
@@ -36,7 +37,6 @@ export function loadSettings(): AppSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    // Migrate old settings
     const providerKeys: Record<ProviderId, string> = {
       openrouter: parsed.providerKeys?.openrouter || parsed.apiKey || '',
       fireworks: parsed.providerKeys?.fireworks || '',
@@ -48,6 +48,7 @@ export function loadSettings(): AppSettings {
       providerKeys,
       fireworksCustomModel: parsed.fireworksCustomModel || '',
       e2bApiKey: parsed.e2bApiKey || '',
+      theme: parsed.theme || loadTheme(),
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -56,6 +57,29 @@ export function loadSettings(): AppSettings {
 
 export function saveSettings(settings: AppSettings): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  saveTheme(settings.theme);
+}
+
+export function loadTheme(): ThemeMode {
+  try {
+    const raw = localStorage.getItem(THEME_KEY);
+    if (raw === 'light') return 'light';
+    return 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+export function saveTheme(theme: ThemeMode): void {
+  localStorage.setItem(THEME_KEY, theme);
+  // Apply theme to document
+  if (theme === 'light') {
+    document.documentElement.classList.add('light');
+    document.documentElement.classList.remove('dark');
+  } else {
+    document.documentElement.classList.add('dark');
+    document.documentElement.classList.remove('light');
+  }
 }
 
 export function generateId(): string {

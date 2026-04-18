@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Menu, Code2 } from 'lucide-react';
+import { Menu, Code2, Sun, Moon } from 'lucide-react';
 import { useChats } from './hooks/useChats';
 import { useModels } from './hooks/useModels';
-import { loadSettings, saveSettings, generateId } from './utils/storage';
+import { loadSettings, saveSettings, generateId, saveTheme } from './utils/storage';
 import { agentCompletion } from './utils/api';
 import { executeToolCall, ToolExecutionContext } from './utils/tools';
 import {
-  createSandbox,
-  destroySandbox,
+  createSandboxForChat,
+  destroySandboxForChat,
   sandboxListFiles,
   sandboxReadFileForEditor,
   getActiveSandbox,
+  setActiveChatId as setE2bActiveChatId,
+  hasSandbox,
 } from './utils/e2b';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
@@ -19,14 +21,11 @@ import SettingsModal from './components/SettingsModal';
 import FileExplorer from './components/FileExplorer';
 import CodeEditor from './components/CodeEditor';
 import SandboxControl from './components/SandboxControl';
-import { AppSettings, Message, ProviderId, SandboxState } from './types';
+import { AppSettings, Message, ProviderId, SandboxState, ThemeMode } from './types';
 import { FSNode, FSFile } from './types/fs';
 import { updateFileContent, mergeFileTrees } from './utils/fsOps';
 
-const MAX_AGENT_ITERATIONS = 10;
-
-// Persist sandbox ID across refreshes
-const SANDBOX_ID_KEY = 'anygent_sandbox_id';
+const MAX_AGENT_ITERATIONS = 15;
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -54,6 +53,7 @@ export default function App() {
     finalizeAssistantMessage,
     updateChatModel,
     updateChatProvider,
+    updateChatSandboxId,
   } = useChats();
 
   const { models, loading: modelsLoading, loadModels, clearModels } = useModels();
@@ -64,6 +64,7 @@ export default function App() {
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>(
     () => loadSettings().selectedProvider || 'openrouter'
   );
+  const [theme, setTheme] = useState<ThemeMode>(() => settings.theme || 'dark');
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [streaming, setStreaming] = useState(false);
@@ -87,33 +88,42 @@ export default function App() {
     fsTreeRef.current = fsTree;
   }, [fsTree]);
 
+  // Apply theme on mount
+  useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.classList.add('light');
+      document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    }
+  }, [theme]);
+
   useEffect(() => {
     setSidebarOpen(isDesktop);
   }, [isDesktop]);
 
-  // Restore sandbox on page load if we had one
+  // Sync sandbox state when switching chats
   useEffect(() => {
-    const savedId = localStorage.getItem(SANDBOX_ID_KEY);
-    if (savedId && settings.e2bApiKey) {
-      // Sandbox was running before refresh — mark as running
-      // The actual sandbox is still alive on E2B servers (within timeout)
-      setSandboxState({
-        status: 'running',
-        sandboxId: savedId,
-        error: null,
-      });
+    if (activeChatId) {
+      setE2bActiveChatId(activeChatId);
+      if (hasSandbox(activeChatId)) {
+        const chat = chats.find((c) => c.id === activeChatId);
+        setSandboxState({
+          status: 'running',
+          sandboxId: chat?.sandboxId || activeChatId,
+          error: null,
+        });
+        // Refresh files for this chat's sandbox
+        refreshSandboxFiles();
+      } else {
+        setSandboxState({ status: 'idle', sandboxId: null, error: null });
+        setFsTree([]);
+        setActiveFile(null);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Persist sandbox ID
-  useEffect(() => {
-    if (sandboxState.sandboxId) {
-      localStorage.setItem(SANDBOX_ID_KEY, sandboxState.sandboxId);
-    } else if (sandboxState.status === 'idle') {
-      localStorage.removeItem(SANDBOX_ID_KEY);
-    }
-  }, [sandboxState.sandboxId, sandboxState.status]);
+  }, [activeChatId]);
 
   // Load models when provider or key changes
   useEffect(() => {
@@ -210,12 +220,20 @@ export default function App() {
     [settings]
   );
 
+  const toggleTheme = useCallback(() => {
+    const newTheme: ThemeMode = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    saveTheme(newTheme);
+    const updated = { ...settings, theme: newTheme };
+    setSettings(updated);
+    saveSettings(updated);
+  }, [theme, settings]);
+
   // ─── Sandbox Controls ───────────────────────────────────────────────────
 
   const refreshSandboxFiles = useCallback(async () => {
     try {
       const tree = await sandboxListFiles('/home/user');
-      // Merge: keep any locally-tracked files that sandbox scan might have missed
       const merged = mergeFileTrees(fsTreeRef.current, tree);
       setFsTree(merged);
       fsTreeRef.current = merged;
@@ -224,42 +242,70 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * Auto-create sandbox for a chat. Called on first user message.
+   */
+  const ensureSandboxForChat = useCallback(
+    async (chatId: string): Promise<boolean> => {
+      // Already has a sandbox
+      if (hasSandbox(chatId)) {
+        setE2bActiveChatId(chatId);
+        return true;
+      }
+
+      // No E2B key — can't create sandbox
+      if (!settings.e2bApiKey) {
+        // Continue without sandbox — agent will work but no file system
+        return false;
+      }
+
+      setSandboxState({ status: 'creating', sandboxId: null, error: null });
+
+      try {
+        const sandbox = await createSandboxForChat(settings.e2bApiKey, chatId);
+        const sbId = sandbox.sandboxId;
+        setSandboxState({
+          status: 'running',
+          sandboxId: sbId,
+          error: null,
+        });
+        updateChatSandboxId(chatId, sbId);
+        await refreshSandboxFiles();
+        return true;
+      } catch (err) {
+        setSandboxState({
+          status: 'error',
+          sandboxId: null,
+          error: err instanceof Error ? err.message : 'Failed to create sandbox',
+        });
+        return false;
+      }
+    },
+    [settings.e2bApiKey, refreshSandboxFiles, updateChatSandboxId]
+  );
+
   const handleCreateSandbox = useCallback(async () => {
     if (!settings.e2bApiKey) {
       setSettingsOpen(true);
       return;
     }
-
-    setSandboxState({ status: 'creating', sandboxId: null, error: null });
-
-    try {
-      const sandbox = await createSandbox(settings.e2bApiKey);
-      setSandboxState({
-        status: 'running',
-        sandboxId: sandbox.sandboxId,
-        error: null,
-      });
-      await refreshSandboxFiles();
-    } catch (err) {
-      setSandboxState({
-        status: 'error',
-        sandboxId: null,
-        error: err instanceof Error ? err.message : 'Failed to create sandbox',
-      });
-    }
-  }, [settings.e2bApiKey, refreshSandboxFiles]);
+    if (!activeChatId) return;
+    await ensureSandboxForChat(activeChatId);
+  }, [settings.e2bApiKey, activeChatId, ensureSandboxForChat]);
 
   const handleDestroySandbox = useCallback(async () => {
+    if (!activeChatId) return;
     setSandboxState({ status: 'destroying', sandboxId: null, error: null });
     try {
-      await destroySandbox();
+      await destroySandboxForChat(activeChatId);
     } catch {
       // ignore
     }
     setSandboxState({ status: 'idle', sandboxId: null, error: null });
+    updateChatSandboxId(activeChatId, null);
     setFsTree([]);
     setActiveFile(null);
-  }, []);
+  }, [activeChatId, updateChatSandboxId]);
 
   // ─── Stop Agent ───────────────────────────────────────────────────────────
 
@@ -304,9 +350,14 @@ export default function App() {
       setStreaming(true);
       streamChatIdRef.current = chatId;
 
+      // STEP 1: Auto-create sandbox on first message if E2B key is available
+      const isFirstMessage = priorMessages.length === 0;
+      if (isFirstMessage && settings.e2bApiKey && !hasSandbox(chatId)) {
+        await ensureSandboxForChat(chatId);
+      }
+
       try {
         for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
-          // Check if aborted
           if (abortController.signal.aborted) break;
 
           const assistantMsgId = generateId();
@@ -420,6 +471,7 @@ export default function App() {
     },
     [
       settings.providerKeys,
+      settings.e2bApiKey,
       selectedProvider,
       selectedModel,
       streaming,
@@ -431,11 +483,16 @@ export default function App() {
       updateLastAssistantMessage,
       finalizeAssistantMessage,
       refreshSandboxFiles,
+      ensureSandboxForChat,
     ]
   );
 
   const handleNewChat = useCallback(() => {
     createChat(selectedModel, selectedProvider);
+    // Reset file tree for new chat
+    setFsTree([]);
+    setActiveFile(null);
+    setSandboxState({ status: 'idle', sandboxId: null, error: null });
     if (!isDesktop) setSidebarOpen(false);
   }, [createChat, selectedModel, selectedProvider, isDesktop]);
 
@@ -463,6 +520,21 @@ export default function App() {
       if (!isDesktop) setSidebarOpen(false);
     },
     [setActiveChatId, isDesktop, chats, selectedProvider, settings]
+  );
+
+  // Handle chat deletion — also destroy its sandbox
+  const handleDeleteChat = useCallback(
+    async (id: string) => {
+      if (hasSandbox(id)) {
+        try {
+          await destroySandboxForChat(id);
+        } catch {
+          // ignore
+        }
+      }
+      deleteChat(id);
+    },
+    [deleteChat]
   );
 
   const currentApiKey = settings.providerKeys[selectedProvider];
@@ -511,7 +583,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app-root">
+    <div className={`app-root ${theme}`}>
       <div className="bg-noise" />
 
       {sidebarOpen && !isDesktop && (
@@ -524,7 +596,7 @@ export default function App() {
           activeChatId={activeChatId}
           onSelectChat={handleSelectChat}
           onNewChat={handleNewChat}
-          onDeleteChat={deleteChat}
+          onDeleteChat={handleDeleteChat}
           onRenameChat={renameChat}
           onClose={() => setSidebarOpen(false)}
         />
@@ -541,6 +613,14 @@ export default function App() {
           </button>
           <span className="app-logo">anygent builder</span>
           <div className="header-spacer" />
+
+          <button
+            className="theme-toggle-btn"
+            onClick={toggleTheme}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
 
           <SandboxControl
             sandboxState={sandboxState}

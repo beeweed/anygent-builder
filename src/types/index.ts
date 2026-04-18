@@ -36,6 +36,7 @@ export interface Chat {
   provider: ProviderId;
   createdAt: number;
   updatedAt: number;
+  sandboxId?: string | null;
 }
 
 export interface Model {
@@ -58,6 +59,8 @@ export interface ProviderConfig {
   placeholder: string;
 }
 
+export type ThemeMode = 'dark' | 'light';
+
 export interface AppSettings {
   apiKey: string;
   selectedModel: string;
@@ -65,6 +68,7 @@ export interface AppSettings {
   providerKeys: Record<ProviderId, string>;
   fireworksCustomModel: string;
   e2bApiKey: string;
+  theme: ThemeMode;
 }
 
 export type SandboxStatus = 'idle' | 'creating' | 'running' | 'error' | 'destroying';

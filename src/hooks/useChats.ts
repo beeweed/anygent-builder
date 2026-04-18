@@ -19,6 +19,7 @@ export function useChats() {
       provider,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      sandboxId: null,
     };
     setChats((prev) => {
       const updated = [newChat, ...prev];
@@ -141,6 +142,14 @@ export function useChats() {
     });
   }, []);
 
+  const updateChatSandboxId = useCallback((chatId: string, sandboxId: string | null) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => (c.id === chatId ? { ...c, sandboxId } : c));
+      saveChats(updated);
+      return updated;
+    });
+  }, []);
+
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
 
   return {
@@ -158,5 +167,6 @@ export function useChats() {
     getMessages,
     updateChatModel,
     updateChatProvider,
+    updateChatSandboxId,
   };
 }

@@ -1,6 +1,7 @@
 import { Message, Model, ProviderId, ToolCall } from '../types';
 import { getProvider } from './providers';
 import { TOOL_DEFINITIONS } from './tools';
+import { getSystemMessage } from './systemprompt';
 
 export async function fetchModels(apiKey: string, providerId: ProviderId = 'openrouter'): Promise<Model[]> {
   const provider = getProvider(providerId);
@@ -67,7 +68,9 @@ interface ApiMessage {
 }
 
 function buildApiMessages(messages: Message[]): ApiMessage[] {
-  return messages.map((m) => {
+  // Inject system prompt as the first message
+  const systemMsg: ApiMessage = getSystemMessage();
+  const converted: ApiMessage[] = messages.map((m) => {
     if (m.role === 'tool') {
       return {
         role: 'tool' as const,
@@ -87,6 +90,7 @@ function buildApiMessages(messages: Message[]): ApiMessage[] {
       content: m.content,
     };
   });
+  return [systemMsg, ...converted];
 }
 
 // ─── Agent Completion (ReAct loop with tool calling) ────────────────────────
