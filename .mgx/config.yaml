@@ -1,0 +1,4 @@
+build: null
+build_path: null
+dev: npx vite --host 0.0.0.0
+install: null
