@@ -28,32 +28,138 @@ export async function fetchModels(apiKey: string, providerId: ProviderId = 'open
   }));
 }
 
-async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
-  const res = await fetch('https://api.fireworks.ai/inference/v1/models', {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: 'application/json',
-    },
-  });
+// Known/featured Fireworks models that should always be available,
+// including newly released ones that may not yet appear in the OpenAI-compatible
+// /v1/models listing. These act as a baseline so users can always pick them.
+const FIREWORKS_FEATURED_MODELS: string[] = [
+  'accounts/fireworks/models/qwen3p6-plus',
+  'accounts/fireworks/models/qwen3-235b-a22b-instruct-2507',
+  'accounts/fireworks/models/qwen3-coder-480b-a35b-instruct',
+  'accounts/fireworks/models/qwen3-30b-a3b',
+  'accounts/fireworks/models/deepseek-v3p1',
+  'accounts/fireworks/models/deepseek-v3',
+  'accounts/fireworks/models/deepseek-r1',
+  'accounts/fireworks/models/deepseek-r1-0528',
+  'accounts/fireworks/models/kimi-k2-instruct',
+  'accounts/fireworks/models/llama-v3p3-70b-instruct',
+  'accounts/fireworks/models/llama4-maverick-instruct-basic',
+  'accounts/fireworks/models/llama4-scout-instruct-basic',
+  'accounts/fireworks/models/glm-4p5',
+  'accounts/fireworks/models/glm-4p5-air',
+  'accounts/fireworks/models/mixtral-8x22b-instruct',
+  'accounts/fireworks/models/mixtral-8x7b-instruct',
+  'accounts/fireworks/models/qwen2p5-72b-instruct',
+  'accounts/fireworks/models/qwen2p5-coder-32b-instruct',
+];
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch Fireworks models: ${res.statusText}`);
+/**
+ * Fetch ALL available Fireworks models by querying multiple endpoints and
+ * merging results. We combine:
+ *   1. OpenAI-compatible endpoint:   /inference/v1/models
+ *   2. Fireworks account catalog:    /v1/accounts/fireworks/models?pageSize=200
+ *   3. A curated featured list (so freshly released models are always selectable)
+ */
+async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
+  const modelMap = new Map<string, Model>();
+
+  // 1) OpenAI-compatible inference endpoint
+  try {
+    const res = await fetch('https://api.fireworks.ai/inference/v1/models', {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const list = (data.data || []) as Array<{
+        id: string;
+        owned_by?: string;
+        context_length?: number;
+      }>;
+      for (const m of list) {
+        if (!m?.id) continue;
+        modelMap.set(m.id, {
+          id: m.id,
+          name: formatFireworksModelName(m.id),
+          context_length: m.context_length,
+        });
+      }
+    }
+  } catch {
+    // non-fatal; we fall back to other sources
   }
 
-  const data = await res.json();
-  const models: Model[] = (data.data || []).map((m: { id: string; owned_by?: string; context_length?: number }) => ({
-    id: m.id,
-    name: formatFireworksModelName(m.id),
-    context_length: m.context_length,
-  }));
+  // 2) Fireworks native account catalog (richer list of serverless models).
+  //    This is paginated; we fetch a large pageSize to get them all in one call.
+  try {
+    const res = await fetch(
+      'https://api.fireworks.ai/v1/accounts/fireworks/models?pageSize=200',
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (res.ok) {
+      const data = await res.json();
+      // The API returns { models: [ { name: "accounts/fireworks/models/xxx", displayName, contextLength, kind, ... } ] }
+      const list = (data.models || data.data || []) as Array<{
+        name?: string;
+        id?: string;
+        displayName?: string;
+        contextLength?: number;
+        context_length?: number;
+        kind?: string;
+      }>;
+      for (const m of list) {
+        const id = m.name || m.id;
+        if (!id || !id.startsWith('accounts/')) continue;
+        // Only chat-capable / LLM-style models. If `kind` is present we filter,
+        // otherwise include everything and let users choose.
+        if (m.kind && !/LLM|CHAT|HF_BASE_MODEL/i.test(m.kind)) continue;
+        const existing = modelMap.get(id);
+        modelMap.set(id, {
+          id,
+          name: m.displayName || existing?.name || formatFireworksModelName(id),
+          context_length: m.contextLength || m.context_length || existing?.context_length,
+        });
+      }
+    }
+  } catch {
+    // non-fatal; we still have results from the first endpoint + featured list
+  }
+
+  // 3) Always ensure featured models are present (covers brand-new releases
+  //    such as qwen3p6-plus that may not be returned by the endpoints yet).
+  for (const id of FIREWORKS_FEATURED_MODELS) {
+    if (!modelMap.has(id)) {
+      modelMap.set(id, {
+        id,
+        name: formatFireworksModelName(id),
+      });
+    }
+  }
+
+  // Sort: featured/qwen3p6-plus first, then alphabetical by display name
+  const models = Array.from(modelMap.values()).sort((a, b) => {
+    if (a.id === 'accounts/fireworks/models/qwen3p6-plus') return -1;
+    if (b.id === 'accounts/fireworks/models/qwen3p6-plus') return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   return models;
 }
 
 function formatFireworksModelName(modelId: string): string {
   const parts = modelId.split('/');
-  const name = parts[parts.length - 1];
-  return name
+  const slug = parts[parts.length - 1];
+  // Convert version markers like "3p6" -> "3.6", "v3p1" -> "v3.1"
+  const withDots = slug.replace(/(\d)p(\d)/g, '$1.$2');
+  return withDots
     .replace(/-/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
