@@ -1,6 +1,6 @@
 import { ToolCall, ToolResult } from '../types';
 import { FSNode, FSFile } from '../types/fs';
-import { sandboxWriteFile, sandboxRunCommand, getActiveSandbox } from './e2b';
+import { sandboxWriteFile, getActiveSandbox } from './e2b';
 
 // ─── Tool Definitions (sent to the LLM API) ────────────────────────────────
 
@@ -28,28 +28,6 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'shell_exec',
-      description:
-        'Execute a shell command in the sandbox. Use for installing packages, running builds, starting servers, etc.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: {
-            type: 'string',
-            description: 'The shell command to execute. Example: npm install express',
-          },
-          cwd: {
-            type: 'string',
-            description: 'Working directory for the command. Defaults to /home/user/project',
-          },
-        },
-        required: ['command'],
-      },
-    },
-  },
 ];
 
 // ─── Path Validation ────────────────────────────────────────────────────────
@@ -63,22 +41,20 @@ function validateFilePath(filePath: string): string | null {
   if (!filePath.startsWith(SANDBOX_PREFIX)) {
     return `file_path must start with "${SANDBOX_PREFIX}". Got: "${filePath}"`;
   }
-  // Reject path traversal
   if (filePath.includes('..')) {
     return 'file_path must not contain "..".';
   }
-  // Must have a filename after the prefix
   const relative = filePath.slice(SANDBOX_PREFIX.length);
   if (!relative || relative.endsWith('/')) {
     return 'file_path must point to a file, not a directory.';
   }
-  return null; // valid
+  return null;
 }
 
 // ─── FS Tree helpers ────────────────────────────────────────────────────────
 
 function buildPathParts(filePath: string): { folders: string[]; fileName: string } {
-  const relative = filePath.slice(SANDBOX_PREFIX.length); // e.g. "project/src/App.tsx"
+  const relative = filePath.slice(SANDBOX_PREFIX.length);
   const segments = relative.split('/').filter(Boolean);
   const fileName = segments.pop()!;
   return { folders: segments, fileName };
@@ -92,7 +68,6 @@ function insertFileInTree(
   content: string
 ): FSNode[] {
   if (folderParts.length === 0) {
-    // Insert/update file at this level
     const existingIdx = tree.findIndex(
       (n) => n.kind === 'file' && n.name === fileName
     );
@@ -129,7 +104,7 @@ function insertFileInTree(
     const newFolder: FSNode = {
       kind: 'folder',
       name: folderName,
-      path: '/' + buildFolderPath(filePath, folderParts.length - remaining.length),
+      path: buildFolderFullPath(filePath, folderParts.length - remaining.length),
       children: insertFileInTree([], remaining, fileName, filePath, content),
     };
     updated.push(newFolder);
@@ -138,10 +113,9 @@ function insertFileInTree(
   return updated;
 }
 
-function buildFolderPath(filePath: string, depth: number): string {
-  const relative = filePath.slice(SANDBOX_PREFIX.length);
-  const segments = relative.split('/').filter(Boolean);
-  return segments.slice(0, depth).join('/');
+function buildFolderFullPath(filePath: string, depth: number): string {
+  const parts = filePath.split('/');
+  return parts.slice(0, 3 + depth).join('/');
 }
 
 // ─── Tool Execution ─────────────────────────────────────────────────────────
@@ -160,10 +134,6 @@ export async function executeToolCall(
 
   if (fn.name === 'file_write') {
     return executeFileWrite(toolCall, context);
-  }
-
-  if (fn.name === 'shell_exec') {
-    return executeShellExec(toolCall);
   }
 
   return {
@@ -194,7 +164,6 @@ async function executeFileWrite(
 
   const { file_path, content } = args;
 
-  // Validate path
   const pathError = validateFilePath(file_path ?? '');
   if (pathError) {
     return {
@@ -217,13 +186,11 @@ async function executeFileWrite(
   }
 
   try {
-    // Write to E2B sandbox if available, otherwise local only
     const sandbox = getActiveSandbox();
     if (sandbox) {
       await sandboxWriteFile(file_path!, content as string);
     }
 
-    // Also update local FS tree for UI
     const { folders, fileName } = buildPathParts(file_path!);
     const newTree = insertFileInTree(
       context.fsTree,
@@ -234,7 +201,6 @@ async function executeFileWrite(
     );
     context.onTreeChange(newTree);
 
-    // Notify about the created/updated file
     if (context.onFileCreated) {
       context.onFileCreated({
         kind: 'file',
@@ -244,11 +210,10 @@ async function executeFileWrite(
       });
     }
 
-    const target = sandbox ? 'sandbox' : 'local';
     return {
       tool_call_id: id,
       name: 'file_write',
-      result: `Successfully wrote ${(content as string).length} bytes to ${file_path} (${target})`,
+      result: `Wrote ${(content as string).length}B → ${file_path}`,
       success: true,
       file_path: file_path,
     };
@@ -256,71 +221,9 @@ async function executeFileWrite(
     return {
       tool_call_id: id,
       name: 'file_write',
-      result: `Error writing file: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      result: `Error: ${err instanceof Error ? err.message : 'Unknown error'}`,
       success: false,
       file_path: file_path,
-    };
-  }
-}
-
-async function executeShellExec(toolCall: ToolCall): Promise<ToolResult> {
-  const { id, function: fn } = toolCall;
-
-  let args: { command?: string; cwd?: string };
-  try {
-    args = JSON.parse(fn.arguments);
-  } catch {
-    return {
-      tool_call_id: id,
-      name: 'shell_exec',
-      result: 'Error: Invalid JSON in tool arguments.',
-      success: false,
-    };
-  }
-
-  const { command, cwd } = args;
-
-  if (!command || typeof command !== 'string') {
-    return {
-      tool_call_id: id,
-      name: 'shell_exec',
-      result: 'Error: command is required and must be a non-empty string.',
-      success: false,
-    };
-  }
-
-  const sandbox = getActiveSandbox();
-  if (!sandbox) {
-    return {
-      tool_call_id: id,
-      name: 'shell_exec',
-      result: 'Error: No active sandbox. Please create a sandbox first.',
-      success: false,
-    };
-  }
-
-  try {
-    const result = await sandboxRunCommand(command, cwd);
-    const output = [
-      result.stdout ? `stdout:\n${result.stdout}` : '',
-      result.stderr ? `stderr:\n${result.stderr}` : '',
-      `exit code: ${result.exitCode}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    return {
-      tool_call_id: id,
-      name: 'shell_exec',
-      result: output.slice(0, 4000), // Truncate long output
-      success: result.exitCode === 0,
-    };
-  } catch (err) {
-    return {
-      tool_call_id: id,
-      name: 'shell_exec',
-      result: `Error executing command: ${err instanceof Error ? err.message : 'Unknown error'}`,
-      success: false,
     };
   }
 }

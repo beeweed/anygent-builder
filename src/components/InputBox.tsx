@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Settings } from 'lucide-react';
+import { Send, Settings, Loader2, Square } from 'lucide-react';
 import ModelSelector from './ModelSelector';
 import { Model, ProviderId } from '../types';
 
@@ -13,6 +13,7 @@ interface Props {
   onProviderChange: (id: ProviderId) => void;
   onCustomModelChange: (value: string) => void;
   onSend: (content: string) => void;
+  onStop: () => void;
   onOpenSettings: () => void;
   disabled: boolean;
   apiKey: string;
@@ -28,6 +29,7 @@ export default function InputBox({
   onProviderChange,
   onCustomModelChange,
   onSend,
+  onStop,
   onOpenSettings,
   disabled,
   apiKey,
@@ -54,7 +56,6 @@ export default function InputBox({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Enter to send, Shift+Enter for new line
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSend();
@@ -89,7 +90,9 @@ export default function InputBox({
             placeholder={
               !apiKey
                 ? 'Add your API key in Settings to start chatting...'
-                : 'Message Anygent Builder... (Enter to send, Shift+Enter for new line)'
+                : disabled
+                  ? 'Agent is working...'
+                  : 'Message Anygent Builder... (Enter to send, Shift+Enter for new line)'
             }
             className="chat-textarea"
             rows={1}
@@ -103,21 +106,32 @@ export default function InputBox({
             >
               <Settings size={16} />
             </button>
-            <button
-              className={`send-btn ${canSend ? 'send-btn-active' : ''}`}
-              onClick={handleSend}
-              disabled={!canSend}
-              title="Send message"
-            >
-              <Send size={15} />
-            </button>
+            {disabled ? (
+              <button
+                className="send-btn stop-btn"
+                onClick={onStop}
+                title="Stop agent"
+              >
+                <Loader2 size={15} className="stop-spinner" />
+                <Square size={9} className="stop-icon" />
+              </button>
+            ) : (
+              <button
+                className={`send-btn ${canSend ? 'send-btn-active' : ''}`}
+                onClick={handleSend}
+                disabled={!canSend}
+                title="Send message"
+              >
+                <Send size={15} />
+              </button>
+            )}
           </div>
         </div>
         <p className="input-hint">
           {!apiKey
             ? 'Click the ⚙ Settings button to add your API key'
             : disabled
-              ? 'Waiting for response...'
+              ? 'Agent is working... click stop to cancel'
               : 'Enter to send · Shift+Enter for new line'}
         </p>
       </div>

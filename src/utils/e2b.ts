@@ -3,8 +3,7 @@ import { FSNode, FSFile } from '../types/fs';
 
 /**
  * E2B Sandbox Manager
- * Manages the lifecycle of an E2B cloud sandbox and provides
- * file system operations that bridge the sandbox with the local UI state.
+ * Manages the lifecycle of an E2B cloud sandbox.
  */
 
 let activeSandbox: Sandbox | null = null;
@@ -24,7 +23,7 @@ export async function createSandbox(apiKey: string): Promise<Sandbox> {
 
   const sandbox = await Sandbox.create({
     apiKey,
-    timeoutMs: 5 * 60 * 1000, // 5 minutes
+    timeoutMs: 5 * 60 * 1000,
   });
 
   activeSandbox = sandbox;
@@ -85,18 +84,42 @@ export async function sandboxRunCommand(
   };
 }
 
+// System paths to exclude from file listing
+const SYSTEM_EXCLUDES = [
+  'node_modules',
+  '.git',
+  '.gitkeep',
+  '.cache',
+  '.npm',
+  '.config',
+  '.local',
+  '.bashrc',
+  '.bash_history',
+  '.bash_logout',
+  '.profile',
+  '.sudo_as_admin_successful',
+  '.wget-hsts',
+  'snap',
+  '.gnupg',
+  '.ssh',
+];
+
+const EXCLUDE_FIND_ARGS = SYSTEM_EXCLUDES.map(
+  (name) => `-not -path '*/${name}' -not -path '*/${name}/*' -not -name '${name}'`
+).join(' ');
+
 /**
- * List files in the sandbox and build an FSNode tree.
- * Uses `find` command to get a flat list, then builds the tree structure.
+ * List ONLY user project files in the sandbox (no system files).
+ * Scans /home/user/project by default.
  */
 export async function sandboxListFiles(
-  basePath: string = '/home/user'
+  basePath: string = '/home/user/project'
 ): Promise<FSNode[]> {
   if (!activeSandbox) return [];
 
   try {
     const result = await activeSandbox.commands.run(
-      `find ${basePath} -maxdepth 6 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -name '.gitkeep' 2>/dev/null | head -500`,
+      `find ${basePath} -maxdepth 6 ${EXCLUDE_FIND_ARGS} 2>/dev/null | head -500`,
       { timeoutMs: 10000 }
     );
 
@@ -107,9 +130,8 @@ export async function sandboxListFiles(
 
     if (lines.length === 0) return [];
 
-    // Determine which paths are directories
     const dirResult = await activeSandbox.commands.run(
-      `find ${basePath} -maxdepth 6 -type d -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -500`,
+      `find ${basePath} -maxdepth 6 -type d ${EXCLUDE_FIND_ARGS} 2>/dev/null | head -500`,
       { timeoutMs: 10000 }
     );
 
@@ -135,11 +157,7 @@ function buildTreeFromPaths(
   basePath: string
 ): FSNode[] {
   const root: FSNode[] = [];
-
-  // Sort paths so parent directories come before children
   const sorted = [...paths].sort();
-
-  // Map from path -> FSFolder node for quick lookup
   const folderMap = new Map<string, FSNode[]>();
   folderMap.set(basePath, root);
 
@@ -148,14 +166,10 @@ function buildTreeFromPaths(
     const name = fullPath.split('/').pop() || '';
     if (!name) continue;
 
-    // Find parent path
     const parentPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
     const parentChildren = folderMap.get(parentPath);
 
-    if (!parentChildren) {
-      // Parent not in map yet, skip (shouldn't happen with sorted paths)
-      continue;
-    }
+    if (!parentChildren) continue;
 
     if (isDir) {
       const folderNode: FSNode = {
@@ -171,7 +185,7 @@ function buildTreeFromPaths(
         kind: 'file',
         name,
         path: fullPath,
-        content: '', // Content loaded on demand
+        content: '',
       };
       parentChildren.push(fileNode);
     }

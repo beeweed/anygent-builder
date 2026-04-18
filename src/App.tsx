@@ -5,7 +5,13 @@ import { useModels } from './hooks/useModels';
 import { loadSettings, saveSettings, generateId } from './utils/storage';
 import { agentCompletion } from './utils/api';
 import { executeToolCall, ToolExecutionContext } from './utils/tools';
-import { createSandbox, destroySandbox, sandboxListFiles, sandboxReadFileForEditor } from './utils/e2b';
+import {
+  createSandbox,
+  destroySandbox,
+  sandboxListFiles,
+  sandboxReadFileForEditor,
+  getActiveSandbox,
+} from './utils/e2b';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputBox from './components/InputBox';
@@ -18,6 +24,9 @@ import { FSNode, FSFile } from './types/fs';
 import { updateFileContent } from './utils/fsOps';
 
 const MAX_AGENT_ITERATIONS = 10;
+
+// Persist sandbox ID across refreshes
+const SANDBOX_ID_KEY = 'anygent_sandbox_id';
 
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -61,19 +70,18 @@ export default function App() {
   const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
   const streamBufferRef = useRef('');
   const streamChatIdRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const [fsTree, setFsTree] = useState<FSNode[]>([]);
   const [activeFile, setActiveFile] = useState<FSFile | null>(null);
   const [mobileIdeOpen, setMobileIdeOpen] = useState(false);
 
-  // E2B Sandbox state
   const [sandboxState, setSandboxState] = useState<SandboxState>({
     status: 'idle',
     sandboxId: null,
     error: null,
   });
 
-  // Ref to always have latest fsTree for tool execution
   const fsTreeRef = useRef<FSNode[]>(fsTree);
   useEffect(() => {
     fsTreeRef.current = fsTree;
@@ -82,6 +90,30 @@ export default function App() {
   useEffect(() => {
     setSidebarOpen(isDesktop);
   }, [isDesktop]);
+
+  // Restore sandbox on page load if we had one
+  useEffect(() => {
+    const savedId = localStorage.getItem(SANDBOX_ID_KEY);
+    if (savedId && settings.e2bApiKey) {
+      // Sandbox was running before refresh — mark as running
+      // The actual sandbox is still alive on E2B servers (within timeout)
+      setSandboxState({
+        status: 'running',
+        sandboxId: savedId,
+        error: null,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist sandbox ID
+  useEffect(() => {
+    if (sandboxState.sandboxId) {
+      localStorage.setItem(SANDBOX_ID_KEY, sandboxState.sandboxId);
+    } else if (sandboxState.status === 'idle') {
+      localStorage.removeItem(SANDBOX_ID_KEY);
+    }
+  }, [sandboxState.sandboxId, sandboxState.status]);
 
   // Load models when provider or key changes
   useEffect(() => {
@@ -182,11 +214,11 @@ export default function App() {
 
   const refreshSandboxFiles = useCallback(async () => {
     try {
-      const tree = await sandboxListFiles('/home/user');
+      const tree = await sandboxListFiles('/home/user/project');
       setFsTree(tree);
       fsTreeRef.current = tree;
     } catch {
-      // Silently fail - sandbox might be gone
+      // Silently fail
     }
   }, []);
 
@@ -205,7 +237,6 @@ export default function App() {
         sandboxId: sandbox.sandboxId,
         error: null,
       });
-      // Refresh file tree from sandbox
       await refreshSandboxFiles();
     } catch (err) {
       setSandboxState({
@@ -228,6 +259,18 @@ export default function App() {
     setActiveFile(null);
   }, []);
 
+  // ─── Stop Agent ───────────────────────────────────────────────────────────
+
+  const handleStop = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setStreaming(false);
+    setStreamingMsgId(null);
+    streamChatIdRef.current = null;
+  }, []);
+
   // ─── Agent Send (ReAct Loop) ──────────────────────────────────────────────
 
   const handleSend = useCallback(
@@ -242,7 +285,6 @@ export default function App() {
         chatId = createChat(selectedModel, selectedProvider);
       }
 
-      // Add user message
       const userMsg: Message = {
         id: generateId(),
         role: 'user',
@@ -251,16 +293,20 @@ export default function App() {
       };
       addMessage(chatId, userMsg);
 
-      // Build history for the agent
       let history: Message[] = [...priorMessages, userMsg];
+
+      // Create abort controller for this run
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
       setStreaming(true);
       streamChatIdRef.current = chatId;
 
       try {
-        // ReAct loop: keep iterating until the model responds without tool calls
         for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
-          // Create a placeholder assistant message for streaming
+          // Check if aborted
+          if (abortController.signal.aborted) break;
+
           const assistantMsgId = generateId();
           const assistantMsg: Message = {
             id: assistantMsgId,
@@ -274,21 +320,19 @@ export default function App() {
 
           let hadError = false;
 
-          // Call the LLM with tools
           const result = await agentCompletion(
             currentKey,
             selectedModel,
             history,
             {
               onToken: (token) => {
+                if (abortController.signal.aborted) return;
                 streamBufferRef.current += token;
                 if (streamChatIdRef.current) {
                   updateLastAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
                 }
               },
-              onToolCall: () => {
-                // Tool calls are handled after completion
-              },
+              onToolCall: () => {},
               onDone: () => {},
               onError: (err) => {
                 hadError = true;
@@ -299,25 +343,16 @@ export default function App() {
               },
             },
             selectedProvider,
-            true // enable tools
+            true
           );
 
-          // If there was an error, stop the loop
-          if (hadError) {
-            break;
-          }
+          if (hadError || abortController.signal.aborted) break;
 
           const { content: responseContent, toolCalls } = result;
-
-          // Finalize the assistant message
           finalizeAssistantMessage(chatId, responseContent, toolCalls);
 
-          // If no tool calls, we're done - the model gave a final answer
-          if (!toolCalls || toolCalls.length === 0) {
-            break;
-          }
+          if (!toolCalls || toolCalls.length === 0) break;
 
-          // Add the assistant message (with tool_calls) to history
           const assistantHistoryMsg: Message = {
             id: assistantMsgId,
             role: 'assistant',
@@ -327,9 +362,10 @@ export default function App() {
           };
           history = [...history, assistantHistoryMsg];
 
-          // Execute each tool call and add results to history + chat
           const toolResultMessages: Message[] = [];
           for (const tc of toolCalls) {
+            if (abortController.signal.aborted) break;
+
             const context: ToolExecutionContext = {
               fsTree: fsTreeRef.current,
               onTreeChange: (newTree) => {
@@ -357,25 +393,27 @@ export default function App() {
             history = [...history, toolMsg];
           }
 
-          // Add all tool result messages to the chat
           addMessages(chatId, toolResultMessages);
 
-          // After tool execution, refresh sandbox file tree
-          if (sandboxState.status === 'running') {
+          // Refresh sandbox files after tool execution
+          if (getActiveSandbox()) {
             await refreshSandboxFiles();
           }
 
           setStreamingMsgId(null);
         }
       } catch (err) {
-        const errContent = `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`;
-        if (streamChatIdRef.current) {
-          finalizeAssistantMessage(streamChatIdRef.current, errContent);
+        if (!abortController.signal.aborted) {
+          const errContent = `⚠️ ${err instanceof Error ? err.message : 'Unknown error'}`;
+          if (streamChatIdRef.current) {
+            finalizeAssistantMessage(streamChatIdRef.current, errContent);
+          }
         }
       } finally {
         setStreaming(false);
         setStreamingMsgId(null);
         streamChatIdRef.current = null;
+        abortControllerRef.current = null;
       }
     },
     [
@@ -390,7 +428,6 @@ export default function App() {
       addMessages,
       updateLastAssistantMessage,
       finalizeAssistantMessage,
-      sandboxState.status,
       refreshSandboxFiles,
     ]
   );
@@ -431,25 +468,7 @@ export default function App() {
 
   const handleOpenFile = useCallback(
     async (file: FSFile) => {
-      // If sandbox is running, load content from sandbox
-      if (sandboxState.status === 'running' && !file.content) {
-        try {
-          const content = await sandboxReadFileForEditor(file.path);
-          const enrichedFile = { ...file, content };
-          setActiveFile(enrichedFile);
-          return;
-        } catch {
-          // Fall through to use local content
-        }
-      }
-      setActiveFile(file);
-    },
-    [sandboxState.status]
-  );
-
-  const handleMobileOpenFile = useCallback(
-    async (file: FSFile) => {
-      if (sandboxState.status === 'running' && !file.content) {
+      if (getActiveSandbox() && !file.content) {
         try {
           const content = await sandboxReadFileForEditor(file.path);
           setActiveFile({ ...file, content });
@@ -460,7 +479,7 @@ export default function App() {
       }
       setActiveFile(file);
     },
-    [sandboxState.status]
+    []
   );
 
   const handleTreeChange = useCallback((tree: FSNode[]) => {
@@ -556,6 +575,7 @@ export default function App() {
               onProviderChange={handleProviderChange}
               onCustomModelChange={handleCustomModelChange}
               onSend={handleSend}
+              onStop={handleStop}
               onOpenSettings={() => setSettingsOpen(true)}
               disabled={streaming}
               apiKey={currentApiKey}
@@ -582,7 +602,7 @@ export default function App() {
               <FileExplorer
                 tree={fsTree}
                 activeFilePath={activeFile?.path ?? null}
-                onOpenFile={handleMobileOpenFile}
+                onOpenFile={handleOpenFile}
                 onTreeChange={handleTreeChange}
               />
             </div>
