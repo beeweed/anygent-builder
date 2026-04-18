@@ -1,13 +1,26 @@
-import { Chat, AppSettings } from '../types';
+import { Chat, AppSettings, ProviderId } from '../types';
 
 const CHATS_KEY = 'anygent_chats';
 const SETTINGS_KEY = 'anygent_settings';
+
+const DEFAULT_SETTINGS: AppSettings = {
+  apiKey: '',
+  selectedModel: '',
+  selectedProvider: 'openrouter',
+  providerKeys: { openrouter: '', fireworks: '' },
+  fireworksCustomModel: '',
+};
 
 export function loadChats(): Chat[] {
   try {
     const raw = localStorage.getItem(CHATS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as Chat[];
+    const chats = JSON.parse(raw) as Chat[];
+    // Migrate old chats that don't have a provider field
+    return chats.map((c) => ({
+      ...c,
+      provider: c.provider || 'openrouter',
+    }));
   } catch {
     return [];
   }
@@ -20,10 +33,22 @@ export function saveChats(chats: Chat[]): void {
 export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { apiKey: '', selectedModel: '' };
-    return JSON.parse(raw) as AppSettings;
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    // Migrate old settings
+    const providerKeys: Record<ProviderId, string> = {
+      openrouter: parsed.providerKeys?.openrouter || parsed.apiKey || '',
+      fireworks: parsed.providerKeys?.fireworks || '',
+    };
+    return {
+      apiKey: providerKeys[parsed.selectedProvider || 'openrouter'] || parsed.apiKey || '',
+      selectedModel: parsed.selectedModel || '',
+      selectedProvider: parsed.selectedProvider || 'openrouter',
+      providerKeys,
+      fireworksCustomModel: parsed.fireworksCustomModel || '',
+    };
   } catch {
-    return { apiKey: '', selectedModel: '' };
+    return DEFAULT_SETTINGS;
   }
 }
 

@@ -1,13 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Settings } from 'lucide-react';
 import ModelSelector from './ModelSelector';
-import { Model } from '../types';
+import { Model, ProviderId } from '../types';
 
 interface Props {
   models: Model[];
   modelsLoading: boolean;
   selectedModel: string;
+  selectedProvider: ProviderId;
+  fireworksCustomModel: string;
   onModelSelect: (id: string) => void;
+  onProviderChange: (id: ProviderId) => void;
+  onCustomModelChange: (value: string) => void;
   onSend: (content: string) => void;
   onOpenSettings: () => void;
   disabled: boolean;
@@ -18,7 +22,11 @@ export default function InputBox({
   models,
   modelsLoading,
   selectedModel,
+  selectedProvider,
+  fireworksCustomModel,
   onModelSelect,
+  onProviderChange,
+  onCustomModelChange,
   onSend,
   onOpenSettings,
   disabled,
@@ -44,7 +52,6 @@ export default function InputBox({
     }
   }, [value, disabled, onSend]);
 
-
   const canSend = value.trim().length > 0 && !disabled && !!apiKey;
 
   return (
@@ -54,8 +61,12 @@ export default function InputBox({
           <ModelSelector
             models={models}
             selectedModel={selectedModel}
+            selectedProvider={selectedProvider}
             loading={modelsLoading}
+            fireworksCustomModel={fireworksCustomModel}
             onSelect={onModelSelect}
+            onProviderChange={onProviderChange}
+            onCustomModelChange={onCustomModelChange}
           />
         </div>
         <div className="input-row">

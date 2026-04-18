@@ -1,9 +1,15 @@
-import { Message, Model } from '../types';
+import { Message, Model, ProviderId } from '../types';
+import { getProvider } from './providers';
 
-const BASE_URL = 'https://openrouter.ai/api/v1';
+export async function fetchModels(apiKey: string, providerId: ProviderId = 'openrouter'): Promise<Model[]> {
+  const provider = getProvider(providerId);
 
-export async function fetchModels(apiKey: string): Promise<Model[]> {
-  const res = await fetch(`${BASE_URL}/models`, {
+  if (providerId === 'fireworks') {
+    return fetchFireworksModels(apiKey);
+  }
+
+  // OpenRouter
+  const res = await fetch(`${provider.baseUrl}/models`, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
     },
@@ -13,23 +19,64 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
   return data.data as Model[];
 }
 
+async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
+  // Fireworks uses the OpenAI-compatible /models endpoint
+  const res = await fetch('https://api.fireworks.ai/inference/v1/models', {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch Fireworks models: ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  const models: Model[] = (data.data || []).map((m: { id: string; owned_by?: string; context_length?: number }) => ({
+    id: m.id,
+    name: formatFireworksModelName(m.id),
+    context_length: m.context_length,
+  }));
+
+  return models;
+}
+
+function formatFireworksModelName(modelId: string): string {
+  // Model IDs look like "accounts/fireworks/models/llama-v3p3-70b-instruct"
+  // Extract the last part and make it readable
+  const parts = modelId.split('/');
+  const name = parts[parts.length - 1];
+  return name
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export async function streamCompletion(
   apiKey: string,
   model: string,
   messages: Message[],
   onToken: (token: string) => void,
   onDone: () => void,
-  onError: (err: string) => void
+  onError: (err: string) => void,
+  providerId: ProviderId = 'openrouter'
 ): Promise<void> {
+  const provider = getProvider(providerId);
+
   try {
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    };
+
+    if (providerId === 'openrouter') {
+      headers['HTTP-Referer'] = window.location.origin;
+      headers['X-Title'] = 'Anygent Builder';
+    }
+
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': window.location.origin,
-        'X-Title': 'Anygent Builder',
-      },
+      headers,
       body: JSON.stringify({
         model,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),

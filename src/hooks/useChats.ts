@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Chat, Message } from '../types';
+import { Chat, Message, ProviderId } from '../types';
 import { loadChats, saveChats, generateId } from '../utils/storage';
 
 export function useChats() {
@@ -9,13 +9,14 @@ export function useChats() {
     return stored.length > 0 ? stored[0].id : null;
   });
 
-  const createChat = useCallback((model: string): string => {
+  const createChat = useCallback((model: string, provider: ProviderId = 'openrouter'): string => {
     const id = generateId();
     const newChat: Chat = {
       id,
       title: 'New Chat',
       messages: [],
       model,
+      provider,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -105,6 +106,14 @@ export function useChats() {
     });
   }, []);
 
+  const updateChatProvider = useCallback((chatId: string, provider: ProviderId) => {
+    setChats((prev) => {
+      const updated = prev.map((c) => (c.id === chatId ? { ...c, provider } : c));
+      saveChats(updated);
+      return updated;
+    });
+  }, []);
+
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
 
   return {
@@ -119,5 +128,6 @@ export function useChats() {
     updateLastAssistantMessage,
     finalizeAssistantMessage,
     updateChatModel,
+    updateChatProvider,
   };
 }

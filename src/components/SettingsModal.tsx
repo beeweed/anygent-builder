@@ -1,15 +1,25 @@
 import { useState, useEffect } from 'react';
-import { X, Key, Eye, EyeOff } from 'lucide-react';
+import { X, Eye, EyeOff, Globe, Zap } from 'lucide-react';
+import { ProviderId } from '../types';
+import { PROVIDERS } from '../utils/providers';
 
 interface Props {
-  apiKey: string;
-  onSave: (key: string) => void;
+  providerKeys: Record<ProviderId, string>;
+  onSave: (keys: Record<ProviderId, string>) => void;
   onClose: () => void;
 }
 
-export default function SettingsModal({ apiKey, onSave, onClose }: Props) {
-  const [value, setValue] = useState(apiKey);
-  const [showKey, setShowKey] = useState(false);
+const PROVIDER_ICONS: Record<ProviderId, React.ReactNode> = {
+  openrouter: <Globe size={14} />,
+  fireworks: <Zap size={14} />,
+};
+
+export default function SettingsModal({ providerKeys, onSave, onClose }: Props) {
+  const [keys, setKeys] = useState<Record<ProviderId, string>>({ ...providerKeys });
+  const [showKeys, setShowKeys] = useState<Record<ProviderId, boolean>>({
+    openrouter: false,
+    fireworks: false,
+  });
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -20,13 +30,17 @@ export default function SettingsModal({ apiKey, onSave, onClose }: Props) {
   }, [onClose]);
 
   const handleSave = () => {
-    onSave(value.trim());
+    const trimmed: Record<ProviderId, string> = {
+      openrouter: keys.openrouter.trim(),
+      fireworks: keys.fireworks.trim(),
+    };
+    onSave(trimmed);
     onClose();
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-panel modal-panel--wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="modal-title">Settings</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -35,39 +49,55 @@ export default function SettingsModal({ apiKey, onSave, onClose }: Props) {
         </div>
 
         <div className="modal-body">
-          <label className="modal-label">
-            <Key size={14} />
-            OpenRouter API Key
-          </label>
-          <div className="modal-input-wrapper">
-            <input
-              type={showKey ? 'text' : 'password'}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="sk-or-..."
-              className="modal-input"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSave();
-              }}
-            />
-            <button
-              type="button"
-              className="modal-eye-btn"
-              onClick={() => setShowKey((v) => !v)}
-              title={showKey ? 'Hide key' : 'Show key'}
-            >
-              {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
-            </button>
-          </div>
+          {PROVIDERS.map((provider) => (
+            <div key={provider.id} className="provider-key-section">
+              <label className="modal-label">
+                {PROVIDER_ICONS[provider.id]}
+                {provider.name} API Key
+              </label>
+              <p className="provider-desc">{provider.description}</p>
+              <div className="modal-input-wrapper">
+                <input
+                  type={showKeys[provider.id] ? 'text' : 'password'}
+                  value={keys[provider.id]}
+                  onChange={(e) =>
+                    setKeys((prev) => ({ ...prev, [provider.id]: e.target.value }))
+                  }
+                  placeholder={provider.placeholder}
+                  className="modal-input"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSave();
+                  }}
+                />
+                <button
+                  type="button"
+                  className="modal-eye-btn"
+                  onClick={() =>
+                    setShowKeys((prev) => ({
+                      ...prev,
+                      [provider.id]: !prev[provider.id],
+                    }))
+                  }
+                  title={showKeys[provider.id] ? 'Hide key' : 'Show key'}
+                >
+                  {showKeys[provider.id] ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+          ))}
           <p className="modal-hint">
-            Your API key is stored locally in your browser and never sent anywhere except OpenRouter.
+            Your API keys are stored locally in your browser and never sent anywhere except their
+            respective providers.
           </p>
         </div>
 
         <div className="modal-footer">
-          <button className="modal-cancel-btn" onClick={onClose}>Cancel</button>
-          <button className="modal-save-btn" onClick={handleSave}>Save</button>
+          <button className="modal-cancel-btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="modal-save-btn" onClick={handleSave}>
+            Save
+          </button>
         </div>
       </div>
     </div>

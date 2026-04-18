@@ -1,19 +1,40 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ChevronDown, Search, Cpu } from 'lucide-react';
-import { Model } from '../types';
+import { ChevronDown, Search, Cpu, Zap, Globe } from 'lucide-react';
+import { Model, ProviderId } from '../types';
+import { PROVIDERS } from '../utils/providers';
 
 interface Props {
   models: Model[];
   selectedModel: string;
+  selectedProvider: ProviderId;
   loading: boolean;
+  fireworksCustomModel: string;
   onSelect: (id: string) => void;
+  onProviderChange: (id: ProviderId) => void;
+  onCustomModelChange: (value: string) => void;
 }
 
-export default function ModelSelector({ models, selectedModel, loading, onSelect }: Props) {
+const PROVIDER_ICONS: Record<ProviderId, React.ReactNode> = {
+  openrouter: <Globe size={12} />,
+  fireworks: <Zap size={12} />,
+};
+
+export default function ModelSelector({
+  models,
+  selectedModel,
+  selectedProvider,
+  loading,
+  fireworksCustomModel,
+  onSelect,
+  onProviderChange,
+  onCustomModelChange,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [showCustomInput, setShowCustomInput] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const customInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = models.filter(
     (m) =>
@@ -21,12 +42,16 @@ export default function ModelSelector({ models, selectedModel, loading, onSelect
       m.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const selectedName = models.find((m) => m.id === selectedModel)?.name || selectedModel || 'Select model';
-  const displayName = selectedName.length > 28 ? selectedName.slice(0, 28) + '...' : selectedName;
+  const currentProvider = PROVIDERS.find((p) => p.id === selectedProvider) || PROVIDERS[0];
+
+  const selectedName =
+    models.find((m) => m.id === selectedModel)?.name || selectedModel || 'Select model';
+  const displayName = selectedName.length > 24 ? selectedName.slice(0, 24) + '...' : selectedName;
 
   const handleOpen = useCallback(() => {
     setOpen((v) => !v);
     setSearch('');
+    setShowCustomInput(false);
   }, []);
 
   useEffect(() => {
@@ -34,6 +59,12 @@ export default function ModelSelector({ models, selectedModel, loading, onSelect
       setTimeout(() => searchRef.current?.focus(), 50);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (showCustomInput && customInputRef.current) {
+      setTimeout(() => customInputRef.current?.focus(), 50);
+    }
+  }, [showCustomInput]);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -45,20 +76,83 @@ export default function ModelSelector({ models, selectedModel, loading, onSelect
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
+  const handleUseCustomModel = () => {
+    if (fireworksCustomModel.trim()) {
+      onSelect(fireworksCustomModel.trim());
+      setOpen(false);
+      setShowCustomInput(false);
+    }
+  };
+
   return (
     <div ref={containerRef} className="model-selector-container">
-      <button
-        onClick={handleOpen}
-        className="model-selector-btn"
-        title={selectedName}
-      >
-        <Cpu size={13} className="model-icon" />
-        <span className="model-name">{loading ? 'Loading models...' : displayName}</span>
-        <ChevronDown size={13} className={`model-chevron ${open ? 'rotated' : ''}`} />
-      </button>
+      <div className="model-selector-row">
+        {/* Provider toggle pills */}
+        <div className="provider-pills">
+          {PROVIDERS.map((p) => (
+            <button
+              key={p.id}
+              className={`provider-pill ${p.id === selectedProvider ? 'provider-pill--active' : ''}`}
+              onClick={() => onProviderChange(p.id)}
+              title={p.description}
+            >
+              {PROVIDER_ICONS[p.id]}
+              <span>{p.name}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Model selector button */}
+        <button onClick={handleOpen} className="model-selector-btn" title={selectedName}>
+          <Cpu size={13} className="model-icon" />
+          <span className="model-name">{loading ? 'Loading models...' : displayName}</span>
+          <ChevronDown size={13} className={`model-chevron ${open ? 'rotated' : ''}`} />
+        </button>
+      </div>
 
       {open && (
         <div className="model-dropdown">
+          {/* Provider header */}
+          <div className="model-dropdown-provider-header">
+            {PROVIDER_ICONS[selectedProvider]}
+            <span>{currentProvider.name}</span>
+          </div>
+
+          {/* Custom model input for Fireworks */}
+          {selectedProvider === 'fireworks' && (
+            <div className="custom-model-section">
+              {!showCustomInput ? (
+                <button
+                  className="custom-model-toggle"
+                  onClick={() => setShowCustomInput(true)}
+                >
+                  + Use custom model ID
+                </button>
+              ) : (
+                <div className="custom-model-input-wrapper">
+                  <input
+                    ref={customInputRef}
+                    type="text"
+                    value={fireworksCustomModel}
+                    onChange={(e) => onCustomModelChange(e.target.value)}
+                    placeholder="accounts/fireworks/models/your-model"
+                    className="custom-model-input"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleUseCustomModel();
+                    }}
+                  />
+                  <button
+                    className="custom-model-use-btn"
+                    onClick={handleUseCustomModel}
+                    disabled={!fireworksCustomModel.trim()}
+                  >
+                    Use
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="model-search-wrapper">
             <Search size={13} className="model-search-icon" />
             <input
@@ -73,10 +167,18 @@ export default function ModelSelector({ models, selectedModel, loading, onSelect
           <div className="model-list">
             {loading ? (
               Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="model-skeleton" style={{ width: `${60 + Math.random() * 30}%` }} />
+                <div
+                  key={i}
+                  className="model-skeleton"
+                  style={{ width: `${60 + Math.random() * 30}%` }}
+                />
               ))
             ) : filtered.length === 0 ? (
-              <div className="model-empty">No models found</div>
+              <div className="model-empty">
+                {models.length === 0
+                  ? 'No models loaded. Add your API key in Settings.'
+                  : 'No models found'}
+              </div>
             ) : (
               filtered.map((m) => (
                 <button
@@ -90,7 +192,11 @@ export default function ModelSelector({ models, selectedModel, loading, onSelect
                   title={m.id}
                 >
                   <span className="model-option-name">{m.name}</span>
-                  <span className="model-option-id">{m.id.split('/')[1] || m.id}</span>
+                  <span className="model-option-id">
+                    {selectedProvider === 'fireworks'
+                      ? m.id
+                      : m.id.split('/')[1] || m.id}
+                  </span>
                 </button>
               ))
             )}

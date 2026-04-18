@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { Model } from '../types';
+import { Model, ProviderId } from '../types';
 import { fetchModels } from '../utils/api';
 
 export function useModels() {
@@ -7,23 +7,38 @@ export function useModels() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fetchedRef = useRef(false);
+  const lastProviderRef = useRef<ProviderId | null>(null);
 
-  const loadModels = useCallback(async (apiKey: string) => {
+  const loadModels = useCallback(async (apiKey: string, providerId: ProviderId = 'openrouter') => {
     if (!apiKey) return;
     setLoading(true);
     setError(null);
     fetchedRef.current = false;
+    lastProviderRef.current = providerId;
     try {
-      const data = await fetchModels(apiKey);
-      const sorted = data.sort((a, b) => a.name.localeCompare(b.name));
-      setModels(sorted);
-      fetchedRef.current = true;
+      const data = await fetchModels(apiKey, providerId);
+      // Only update if this is still the latest request
+      if (lastProviderRef.current === providerId) {
+        const sorted = data.sort((a, b) => a.name.localeCompare(b.name));
+        setModels(sorted);
+        fetchedRef.current = true;
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load models');
+      if (lastProviderRef.current === providerId) {
+        setError(err instanceof Error ? err.message : 'Failed to load models');
+      }
     } finally {
-      setLoading(false);
+      if (lastProviderRef.current === providerId) {
+        setLoading(false);
+      }
     }
   }, []);
 
-  return { models, loading, error, loadModels };
+  const clearModels = useCallback(() => {
+    setModels([]);
+    setError(null);
+    fetchedRef.current = false;
+  }, []);
+
+  return { models, loading, error, loadModels, clearModels };
 }

@@ -10,7 +10,7 @@ import InputBox from './components/InputBox';
 import SettingsModal from './components/SettingsModal';
 import FileExplorer from './components/FileExplorer';
 import CodeEditor from './components/CodeEditor';
-import { AppSettings, Message } from './types';
+import { AppSettings, Message, ProviderId } from './types';
 import { FSNode, FSFile } from './types/fs';
 import { updateFileContent } from './utils/fsOps';
 
@@ -38,13 +38,17 @@ export default function App() {
     updateLastAssistantMessage,
     finalizeAssistantMessage,
     updateChatModel,
+    updateChatProvider,
   } = useChats();
 
-  const { models, loading: modelsLoading, loadModels } = useModels();
+  const { models, loading: modelsLoading, loadModels, clearModels } = useModels();
   const isDesktop = useIsDesktop();
 
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [selectedModel, setSelectedModel] = useState<string>(() => loadSettings().selectedModel);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderId>(
+    () => loadSettings().selectedProvider || 'openrouter'
+  );
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [streaming, setStreaming] = useState(false);
@@ -60,19 +64,31 @@ export default function App() {
     setSidebarOpen(isDesktop);
   }, [isDesktop]);
 
+  // Load models when provider or key changes
   useEffect(() => {
-    if (settings.apiKey) {
-      loadModels(settings.apiKey);
+    const currentKey = settings.providerKeys[selectedProvider];
+    if (currentKey) {
+      loadModels(currentKey, selectedProvider);
+    } else {
+      clearModels();
     }
-  }, [settings.apiKey, loadModels]);
+  }, [selectedProvider, settings.providerKeys, loadModels, clearModels]);
 
   useEffect(() => {
     if (models.length > 0 && !selectedModel) {
-      const defaultModel =
-        models.find((m) => m.id.includes('gpt-4o-mini')) ||
-        models.find((m) => m.id.includes('gpt-4o')) ||
-        models.find((m) => m.id.includes('claude')) ||
-        models[0];
+      let defaultModel;
+      if (selectedProvider === 'openrouter') {
+        defaultModel =
+          models.find((m) => m.id.includes('gpt-4o-mini')) ||
+          models.find((m) => m.id.includes('gpt-4o')) ||
+          models.find((m) => m.id.includes('claude')) ||
+          models[0];
+      } else {
+        defaultModel =
+          models.find((m) => m.id.includes('llama')) ||
+          models.find((m) => m.id.includes('deepseek')) ||
+          models[0];
+      }
       if (defaultModel) {
         setSelectedModel(defaultModel.id);
         const updated = { ...settings, selectedModel: defaultModel.id };
@@ -80,16 +96,43 @@ export default function App() {
         saveSettings(updated);
       }
     }
-  }, [models, selectedModel, settings]);
+  }, [models, selectedModel, settings, selectedProvider]);
 
   const handleSaveSettings = useCallback(
-    (apiKey: string) => {
-      const updated = { ...settings, apiKey };
+    (keys: Record<ProviderId, string>) => {
+      const currentKey = keys[selectedProvider];
+      const updated: AppSettings = {
+        ...settings,
+        apiKey: currentKey,
+        providerKeys: keys,
+      };
       setSettings(updated);
       saveSettings(updated);
-      if (apiKey) loadModels(apiKey);
+      if (currentKey) {
+        loadModels(currentKey, selectedProvider);
+      }
     },
-    [settings, loadModels]
+    [settings, selectedProvider, loadModels]
+  );
+
+  const handleProviderChange = useCallback(
+    (providerId: ProviderId) => {
+      setSelectedProvider(providerId);
+      setSelectedModel('');
+      const currentKey = settings.providerKeys[providerId];
+      const updated: AppSettings = {
+        ...settings,
+        selectedProvider: providerId,
+        selectedModel: '',
+        apiKey: currentKey,
+      };
+      setSettings(updated);
+      saveSettings(updated);
+      if (activeChatId) {
+        updateChatProvider(activeChatId, providerId);
+      }
+    },
+    [settings, activeChatId, updateChatProvider]
   );
 
   const handleModelSelect = useCallback(
@@ -100,20 +143,31 @@ export default function App() {
       saveSettings(updated);
       if (activeChatId) {
         updateChatModel(activeChatId, modelId);
+        updateChatProvider(activeChatId, selectedProvider);
       }
     },
-    [settings, activeChatId, updateChatModel]
+    [settings, activeChatId, updateChatModel, updateChatProvider, selectedProvider]
+  );
+
+  const handleCustomModelChange = useCallback(
+    (value: string) => {
+      const updated = { ...settings, fireworksCustomModel: value };
+      setSettings(updated);
+      saveSettings(updated);
+    },
+    [settings]
   );
 
   const handleSend = useCallback(
     async (content: string) => {
-      if (!settings.apiKey || !selectedModel || streaming) return;
+      const currentKey = settings.providerKeys[selectedProvider];
+      if (!currentKey || !selectedModel || streaming) return;
 
       const priorMessages: Message[] = activeChat?.messages ?? [];
 
       let chatId = activeChatId;
       if (!chatId) {
-        chatId = createChat(selectedModel);
+        chatId = createChat(selectedModel, selectedProvider);
       }
 
       const userMsg: Message = {
@@ -142,7 +196,7 @@ export default function App() {
       const history: Message[] = [...priorMessages, userMsg];
 
       await streamCompletion(
-        settings.apiKey,
+        currentKey,
         selectedModel,
         history,
         (token) => {
@@ -167,11 +221,13 @@ export default function App() {
           setStreaming(false);
           setStreamingMsgId(null);
           streamChatIdRef.current = null;
-        }
+        },
+        selectedProvider
       );
     },
     [
-      settings.apiKey,
+      settings.providerKeys,
+      selectedProvider,
       selectedModel,
       streaming,
       activeChatId,
@@ -184,18 +240,38 @@ export default function App() {
   );
 
   const handleNewChat = useCallback(() => {
-    createChat(selectedModel);
+    createChat(selectedModel, selectedProvider);
     if (!isDesktop) setSidebarOpen(false);
-  }, [createChat, selectedModel, isDesktop]);
+  }, [createChat, selectedModel, selectedProvider, isDesktop]);
 
   const handleSelectChat = useCallback(
     (id: string) => {
       setActiveChatId(id);
+      // When switching to a chat, load its provider and model
+      const chat = chats.find((c) => c.id === id);
+      if (chat) {
+        if (chat.provider && chat.provider !== selectedProvider) {
+          setSelectedProvider(chat.provider);
+          const key = settings.providerKeys[chat.provider];
+          const updated: AppSettings = {
+            ...settings,
+            selectedProvider: chat.provider,
+            selectedModel: chat.model,
+            apiKey: key,
+          };
+          setSettings(updated);
+          saveSettings(updated);
+        }
+        if (chat.model) {
+          setSelectedModel(chat.model);
+        }
+      }
       if (!isDesktop) setSidebarOpen(false);
     },
-    [setActiveChatId, isDesktop]
+    [setActiveChatId, isDesktop, chats, selectedProvider, settings]
   );
 
+  const currentApiKey = settings.providerKeys[selectedProvider];
   const effectiveModel = activeChat?.model || selectedModel;
 
   const handleOpenFile = useCallback((file: FSFile) => {
@@ -229,7 +305,7 @@ export default function App() {
       const updated = updateFileContent(prev, path, content);
       return updated;
     });
-    setActiveFile((prev) => prev && prev.path === path ? { ...prev, content } : prev);
+    setActiveFile((prev) => (prev && prev.path === path ? { ...prev, content } : prev));
   }, []);
 
   return (
@@ -283,11 +359,15 @@ export default function App() {
               models={models}
               modelsLoading={modelsLoading}
               selectedModel={effectiveModel}
+              selectedProvider={selectedProvider}
+              fireworksCustomModel={settings.fireworksCustomModel}
               onModelSelect={handleModelSelect}
+              onProviderChange={handleProviderChange}
+              onCustomModelChange={handleCustomModelChange}
               onSend={handleSend}
               onOpenSettings={() => setSettingsOpen(true)}
               disabled={streaming}
-              apiKey={settings.apiKey}
+              apiKey={currentApiKey}
             />
           </div>
 
@@ -301,10 +381,7 @@ export default function App() {
           </div>
 
           <div className="ce-column">
-            <CodeEditor
-              file={activeFile}
-              onSave={handleFileSave}
-            />
+            <CodeEditor file={activeFile} onSave={handleFileSave} />
           </div>
         </div>
 
@@ -320,10 +397,7 @@ export default function App() {
             </div>
             <div className="mobile-ide-divider" />
             <div className="mobile-ide-pane mobile-ide-ce">
-              <CodeEditor
-                file={activeFile}
-                onSave={handleFileSave}
-              />
+              <CodeEditor file={activeFile} onSave={handleFileSave} />
             </div>
           </div>
         )}
@@ -331,7 +405,7 @@ export default function App() {
 
       {settingsOpen && (
         <SettingsModal
-          apiKey={settings.apiKey}
+          providerKeys={settings.providerKeys}
           onSave={handleSaveSettings}
           onClose={() => setSettingsOpen(false)}
         />
