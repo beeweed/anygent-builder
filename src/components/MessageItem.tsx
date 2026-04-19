@@ -55,6 +55,7 @@ export default function MessageItem({ message, isStreaming }: Props) {
               <ToolChip
                 key={tc.id}
                 filePath={extractFilePath(tc.function.arguments)}
+                toolName={tc.function.name}
                 status="success"
               />
             ))}
