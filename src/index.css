@@ -2186,6 +2186,18 @@ body {
   margin-bottom: 8px;
 }
 
+/* Tool chips rendered AFTER the assistant text ("action" follows "think") */
+.tool-chips-row--after {
+  margin-top: 8px;
+  margin-bottom: 0;
+  padding-left: 10px;
+  border-left: 2px solid rgba(255,255,255,0.06);
+}
+
+html.light .tool-chips-row--after {
+  border-left-color: rgba(0,0,0,0.08);
+}
+
 .tool-chip {
   display: inline-flex;
   align-items: center;

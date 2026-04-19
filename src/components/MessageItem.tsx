@@ -38,9 +38,19 @@ export default function MessageItem({ message, isStreaming }: Props) {
   return (
     <div className="msg-row msg-row-assistant">
       <div className="assistant-content">
-        {/* Show compact tool chips inline */}
+        {/* 1) Show content FIRST (the LLM "think"/response) */}
+        {isStreaming && !hasContent ? (
+          <TypingIndicator />
+        ) : hasContent ? (
+          <>
+            <MarkdownRenderer content={message.content} />
+            {isStreaming && <span className="stream-cursor" />}
+          </>
+        ) : null}
+
+        {/* 2) Show tool chips AFTER content (the "action" taken as a result) */}
         {hasToolCalls && (
-          <div className="tool-chips-row">
+          <div className="tool-chips-row tool-chips-row--after">
             {message.tool_calls!.map((tc) => (
               <ToolChip
                 key={tc.id}
@@ -50,16 +60,6 @@ export default function MessageItem({ message, isStreaming }: Props) {
             ))}
           </div>
         )}
-
-        {/* Show content */}
-        {isStreaming && !hasContent ? (
-          <TypingIndicator />
-        ) : hasContent ? (
-          <>
-            <MarkdownRenderer content={message.content} />
-            {isStreaming && <span className="stream-cursor" />}
-          </>
-        ) : null}
 
         <span className="msg-time msg-time-assistant">{formatTime(message.timestamp)}</span>
       </div>

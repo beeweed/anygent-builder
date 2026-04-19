@@ -401,6 +401,18 @@ export default function App() {
 
           let hadError = false;
 
+          // RAF-coalesced UI updater: tokens arrive at high rate; we accumulate
+          // them into the buffer synchronously but only commit to React state
+          // once per animation frame. This keeps streaming buttery smooth
+          // without dropping a single token.
+          let rafPending = false;
+          const flushToUI = () => {
+            rafPending = false;
+            if (streamChatIdRef.current) {
+              updateLastAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
+            }
+          };
+
           const result = await agentCompletion(
             currentKey,
             selectedModel,
@@ -409,8 +421,9 @@ export default function App() {
               onToken: (token) => {
                 if (abortController.signal.aborted) return;
                 streamBufferRef.current += token;
-                if (streamChatIdRef.current) {
-                  updateLastAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
+                if (!rafPending) {
+                  rafPending = true;
+                  requestAnimationFrame(flushToUI);
                 }
               },
               onToolCall: () => {},
@@ -425,8 +438,17 @@ export default function App() {
             },
             selectedProvider,
             true,
-            settings.systemPromptMode
+            settings.systemPromptMode,
+            abortController.signal
           );
+
+          // Ensure the last tokens are flushed to UI before we finalize
+          if (rafPending) {
+            flushToUI();
+          }
+          if (streamChatIdRef.current && streamBufferRef.current) {
+            updateLastAssistantMessage(streamChatIdRef.current, streamBufferRef.current);
+          }
 
           if (hadError || abortController.signal.aborted) break;
 

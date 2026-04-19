@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Chat, Message, ProviderId } from '../types';
 import { loadChats, saveChats, generateId } from '../utils/storage';
 
@@ -79,6 +79,10 @@ export function useChats() {
     });
   }, []);
 
+  // Throttle localStorage writes during streaming — do NOT save on every token,
+  // that would block the UI thread. Save at most every 400ms during streaming.
+  // The final value is always persisted via finalizeAssistantMessage.
+  const lastSaveRef = useRef(0);
   const updateLastAssistantMessage = useCallback((chatId: string, content: string) => {
     setChats((prev) => {
       const updated = prev.map((c) => {
@@ -90,7 +94,11 @@ export function useChats() {
         }
         return { ...c, messages, updatedAt: Date.now() };
       });
-      saveChats(updated);
+      const now = Date.now();
+      if (now - lastSaveRef.current > 400) {
+        lastSaveRef.current = now;
+        saveChats(updated);
+      }
       return updated;
     });
   }, []);

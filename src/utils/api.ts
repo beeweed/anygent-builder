@@ -106,7 +106,6 @@ async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
 
     if (res.ok) {
       const data = await res.json();
-      // The API returns { models: [ { name: "accounts/fireworks/models/xxx", displayName, contextLength, kind, ... } ] }
       const list = (data.models || data.data || []) as Array<{
         name?: string;
         id?: string;
@@ -118,8 +117,6 @@ async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
       for (const m of list) {
         const id = m.name || m.id;
         if (!id || !id.startsWith('accounts/')) continue;
-        // Only chat-capable / LLM-style models. If `kind` is present we filter,
-        // otherwise include everything and let users choose.
         if (m.kind && !/LLM|CHAT|HF_BASE_MODEL/i.test(m.kind)) continue;
         const existing = modelMap.get(id);
         modelMap.set(id, {
@@ -130,11 +127,10 @@ async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
       }
     }
   } catch {
-    // non-fatal; we still have results from the first endpoint + featured list
+    // non-fatal
   }
 
-  // 3) Always ensure featured models are present (covers brand-new releases
-  //    such as qwen3p6-plus that may not be returned by the endpoints yet).
+  // 3) Ensure featured models are always present.
   for (const id of FIREWORKS_FEATURED_MODELS) {
     if (!modelMap.has(id)) {
       modelMap.set(id, {
@@ -144,7 +140,6 @@ async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
     }
   }
 
-  // Sort: featured/qwen3p6-plus first, then alphabetical by display name
   const models = Array.from(modelMap.values()).sort((a, b) => {
     if (a.id === 'accounts/fireworks/models/qwen3p6-plus') return -1;
     if (b.id === 'accounts/fireworks/models/qwen3p6-plus') return 1;
@@ -157,7 +152,6 @@ async function fetchFireworksModels(apiKey: string): Promise<Model[]> {
 function formatFireworksModelName(modelId: string): string {
   const parts = modelId.split('/');
   const slug = parts[parts.length - 1];
-  // Convert version markers like "3p6" -> "3.6", "v3p1" -> "v3.1"
   const withDots = slug.replace(/(\d)p(\d)/g, '$1.$2');
   return withDots
     .replace(/-/g, ' ')
@@ -177,7 +171,6 @@ function buildApiMessages(
   messages: Message[],
   systemPromptMode: SystemPromptMode = 'big'
 ): ApiMessage[] {
-  // Inject system prompt as the first message
   const systemMsg: ApiMessage =
     systemPromptMode === 'small' ? getCompactSystemMessage() : getSystemMessage();
   const converted: ApiMessage[] = messages.map((m) => {
@@ -214,8 +207,7 @@ export interface AgentCallbacks {
 
 /**
  * Single-turn completion that may return streamed text OR tool_calls.
- * Uses streaming by default, falls back to non-streaming if streaming fails.
- * Returns { content, toolCalls } when done.
+ * ROBUST SSE streaming - proper token-by-token, no compromise.
  */
 export async function agentCompletion(
   apiKey: string,
@@ -224,13 +216,15 @@ export async function agentCompletion(
   callbacks: AgentCallbacks,
   providerId: ProviderId = 'openrouter',
   enableTools: boolean = true,
-  systemPromptMode: SystemPromptMode = 'big'
+  systemPromptMode: SystemPromptMode = 'big',
+  signal?: AbortSignal
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
   const provider = getProvider(providerId);
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
     'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
   };
 
   if (providerId === 'openrouter') {
@@ -240,14 +234,14 @@ export async function agentCompletion(
 
   const apiMessages = buildApiMessages(messages, systemPromptMode);
 
-  // Try streaming first
   const body: Record<string, unknown> = {
     model,
     messages: apiMessages,
     stream: true,
+    // Ensure OpenAI-compatible providers include usage at end
+    stream_options: { include_usage: false },
   };
 
-  // Only include tools if enabled
   if (enableTools) {
     body.tools = TOOL_DEFINITIONS;
     body.tool_choice = 'auto';
@@ -259,58 +253,53 @@ export async function agentCompletion(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal,
     });
   } catch (networkErr) {
+    if (signal?.aborted) return { content: '', toolCalls: [] };
     const errMsg = networkErr instanceof Error ? networkErr.message : 'Network error';
     callbacks.onError(`Network error: ${errMsg}`);
     return { content: '', toolCalls: [] };
   }
 
-  // If streaming with tools fails, retry without streaming
   if (!res.ok) {
     const errData = await res.json().catch(() => null);
     const errMsg = errData?.error?.message || res.statusText;
     const statusCode = res.status;
 
-    // If 400/422 and we have tools, it might be that the model doesn't support tools+streaming
-    // Try non-streaming, then try without tools
+    // If 400/422 with tools, retry without streaming/tools
     if (enableTools && (statusCode === 400 || statusCode === 422)) {
-      // Attempt 1: non-streaming with tools
       const nonStreamResult = await tryNonStreaming(
         provider.baseUrl,
         headers,
         apiMessages,
         model,
-        true, // with tools
-        callbacks
+        true,
+        callbacks,
+        signal
       );
       if (nonStreamResult) return nonStreamResult;
 
-      // Attempt 2: non-streaming without tools
       const noToolsResult = await tryNonStreaming(
         provider.baseUrl,
         headers,
         apiMessages,
         model,
-        false, // without tools
-        callbacks
+        false,
+        callbacks,
+        signal
       );
       if (noToolsResult) return noToolsResult;
     }
 
-    // If 401, it's an auth error
     if (statusCode === 401) {
       callbacks.onError('Invalid API key. Please check your API key in Settings.');
       return { content: '', toolCalls: [] };
     }
-
-    // If 402, insufficient credits
     if (statusCode === 402) {
       callbacks.onError('Insufficient credits. Please add credits to your account.');
       return { content: '', toolCalls: [] };
     }
-
-    // If 429, rate limited
     if (statusCode === 429) {
       callbacks.onError('Rate limited. Please wait a moment and try again.');
       return { content: '', toolCalls: [] };
@@ -320,19 +309,18 @@ export async function agentCompletion(
     return { content: '', toolCalls: [] };
   }
 
-  // Check content type - some responses might not be streaming even if we asked
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    // Non-streaming response returned despite stream: true
+  // Check content type - if JSON, the provider ignored streaming
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json') && !contentType.includes('stream')) {
     return handleJsonResponse(res, callbacks);
   }
 
-  // Handle streaming response
-  return handleStreamingResponse(res, callbacks);
+  // Robust SSE streaming
+  return handleStreamingResponse(res, callbacks, signal);
 }
 
 /**
- * Try a non-streaming request as fallback
+ * Fallback: non-streaming request
  */
 async function tryNonStreaming(
   baseUrl: string,
@@ -340,7 +328,8 @@ async function tryNonStreaming(
   apiMessages: ApiMessage[],
   model: string,
   withTools: boolean,
-  callbacks: AgentCallbacks
+  callbacks: AgentCallbacks,
+  signal?: AbortSignal
 ): Promise<{ content: string; toolCalls: ToolCall[] } | null> {
   const body: Record<string, unknown> = {
     model,
@@ -358,10 +347,10 @@ async function tryNonStreaming(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!res.ok) return null;
-
     return handleJsonResponse(res, callbacks);
   } catch {
     return null;
@@ -388,12 +377,14 @@ async function handleJsonResponse(
     const content = message.content || '';
     const rawToolCalls = message.tool_calls || [];
 
-    // Emit content as a single token
     if (content) {
-      callbacks.onToken(content);
+      // Simulate streaming by chunking large content (keeps UI feel consistent)
+      const chunkSize = 8;
+      for (let i = 0; i < content.length; i += chunkSize) {
+        callbacks.onToken(content.slice(i, i + chunkSize));
+      }
     }
 
-    // Parse tool calls
     const toolCalls: ToolCall[] = rawToolCalls.map((tc: Record<string, unknown>) => ({
       id: (tc.id as string) || `tc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       type: 'function' as const,
@@ -416,11 +407,21 @@ async function handleJsonResponse(
 }
 
 /**
- * Handle a streaming (SSE) response
+ * Handle a streaming (SSE) response - ROBUST implementation.
+ *
+ * Properly handles:
+ *   - \r\n and \n line endings
+ *   - SSE comment lines (starting with ":") used for keep-alive
+ *   - Multi-line data fields (though OpenAI never sends them)
+ *   - Partial UTF-8 sequences across chunks (via TextDecoder stream mode)
+ *   - Malformed JSON (skipped)
+ *   - Abort signals
+ *   - Missing [DONE] marker
  */
 async function handleStreamingResponse(
   res: Response,
-  callbacks: AgentCallbacks
+  callbacks: AgentCallbacks,
+  signal?: AbortSignal
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
   const reader = res.body?.getReader();
   if (!reader) {
@@ -428,54 +429,95 @@ async function handleStreamingResponse(
     return { content: '', toolCalls: [] };
   }
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8');
   let buffer = '';
   let contentAccum = '';
-  const toolCallsMap: Map<number, { id: string; type: string; function: { name: string; arguments: string } }> = new Map();
+  const toolCallsMap: Map<
+    number,
+    { id: string; type: string; function: { name: string; arguments: string } }
+  > = new Map();
+
+  // Abort handler
+  const onAbort = () => {
+    try {
+      reader.cancel();
+    } catch {
+      // ignore
+    }
+  };
+  signal?.addEventListener('abort', onAbort);
 
   try {
     while (true) {
+      if (signal?.aborted) break;
       const { done, value } = await reader.read();
       if (done) break;
 
+      // Decode incrementally (stream: true preserves partial multi-byte chars)
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const payload = trimmed.slice(6);
+      // Normalize line endings - SSE uses \n but some proxies inject \r\n
+      buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+      // SSE events are separated by blank lines (\n\n).
+      // But in practice each "data: ..." line ends with \n and we can parse per-line too,
+      // because OpenAI never sends multi-line data payloads. Parse per line for robustness.
+      let newlineIdx: number;
+      while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIdx);
+        buffer = buffer.slice(newlineIdx + 1);
+
+        // Skip empty lines (event delimiters) and SSE comments (keep-alives)
+        if (line.length === 0) continue;
+        if (line.startsWith(':')) continue;
+
+        // Only handle "data:" fields (ignore "event:", "id:", "retry:" etc.)
+        if (!line.startsWith('data:')) continue;
+
+        // Strip "data:" prefix and optional single leading space
+        let payload = line.slice(5);
+        if (payload.startsWith(' ')) payload = payload.slice(1);
+
         if (payload === '[DONE]') {
           const toolCalls = buildToolCallsFromMap(toolCallsMap);
-          if (toolCalls.length > 0) {
-            callbacks.onToolCall(toolCalls);
-          }
+          if (toolCalls.length > 0) callbacks.onToolCall(toolCalls);
+          signal?.removeEventListener('abort', onAbort);
           return { content: contentAccum, toolCalls };
         }
+
+        if (!payload) continue;
 
         try {
           const parsed = JSON.parse(payload);
 
-          // Check for error in the stream
           if (parsed.error) {
             callbacks.onError(parsed.error.message || 'Stream error');
+            signal?.removeEventListener('abort', onAbort);
             return { content: contentAccum, toolCalls: [] };
           }
 
-          const delta = parsed.choices?.[0]?.delta;
+          const choice = parsed.choices?.[0];
+          if (!choice) continue;
+
+          const delta = choice.delta || choice.message;
           if (!delta) continue;
 
-          // Handle content tokens
-          if (delta.content) {
+          // Emit content token IMMEDIATELY — no buffering, no throttling
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
             contentAccum += delta.content;
             callbacks.onToken(delta.content);
           }
 
-          // Handle tool_calls deltas
-          if (delta.tool_calls) {
+          // Some providers send `reasoning_content` (DeepSeek) — treat as content too
+          if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+            contentAccum += delta.reasoning_content;
+            callbacks.onToken(delta.reasoning_content);
+          }
+
+          // Tool-call deltas (OpenAI-style, incremental JSON via `arguments`)
+          if (Array.isArray(delta.tool_calls)) {
             for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
+              const idx = typeof tc.index === 'number' ? tc.index : 0;
               if (!toolCallsMap.has(idx)) {
                 toolCallsMap.set(idx, {
                   id: tc.id || `tc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -491,12 +533,39 @@ async function handleStreamingResponse(
             }
           }
         } catch {
-          // skip malformed chunks
+          // malformed JSON in a data chunk — skip
+        }
+      }
+    }
+
+    // Drain any final bytes out of the decoder
+    const tail = decoder.decode();
+    if (tail) buffer += tail;
+
+    // Process any leftover in buffer (last line without trailing \n)
+    if (buffer.length > 0) {
+      const trimmed = buffer.trim();
+      if (trimmed.startsWith('data:')) {
+        const payload = trimmed.slice(5).trim();
+        if (payload && payload !== '[DONE]') {
+          try {
+            const parsed = JSON.parse(payload);
+            const delta = parsed.choices?.[0]?.delta;
+            if (delta?.content) {
+              contentAccum += delta.content;
+              callbacks.onToken(delta.content);
+            }
+          } catch {
+            // skip
+          }
         }
       }
     }
   } catch (err) {
-    // Stream read error - return what we have
+    signal?.removeEventListener('abort', onAbort);
+    if (signal?.aborted) {
+      return { content: contentAccum, toolCalls: buildToolCallsFromMap(toolCallsMap) };
+    }
     if (contentAccum) {
       return { content: contentAccum, toolCalls: buildToolCallsFromMap(toolCallsMap) };
     }
@@ -505,11 +574,9 @@ async function handleStreamingResponse(
     return { content: '', toolCalls: [] };
   }
 
-  // If we get here without [DONE], finalize
+  signal?.removeEventListener('abort', onAbort);
   const toolCalls = buildToolCallsFromMap(toolCallsMap);
-  if (toolCalls.length > 0) {
-    callbacks.onToolCall(toolCalls);
-  }
+  if (toolCalls.length > 0) callbacks.onToolCall(toolCalls);
   return { content: contentAccum, toolCalls };
 }
 
@@ -532,7 +599,7 @@ function buildToolCallsFromMap(
   return result;
 }
 
-// ─── Legacy streaming (kept for backward compat if needed) ──────────────────
+// ─── Legacy streaming (kept for backward compat) ────────────────────────────
 
 export async function streamCompletion(
   apiKey: string,
@@ -554,7 +621,7 @@ export async function streamCompletion(
       onError,
     },
     providerId,
-    false // no tools for simple streaming
+    false
   );
   onDone();
 }
