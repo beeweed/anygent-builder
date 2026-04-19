@@ -1,6 +1,6 @@
 import { ToolCall, ToolResult } from '../types';
 import { FSNode, FSFile } from '../types/fs';
-import { sandboxWriteFile, getActiveSandbox } from './e2b';
+import { sandboxWriteFile, sandboxReadFile, getActiveSandbox } from './e2b';
 
 // ─── Tool Definitions (sent to the LLM API) ────────────────────────────────
 
@@ -25,6 +25,25 @@ export const TOOL_DEFINITIONS = [
           },
         },
         required: ['file_path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'file_read',
+      description:
+        'Read the content of an existing file from the sandbox. Returns content with line numbers.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description:
+              'Absolute path starting with /home/user/. Example: /home/user/project/src/main.py',
+          },
+        },
+        required: ['file_path'],
       },
     },
   },
@@ -136,12 +155,83 @@ export async function executeToolCall(
     return executeFileWrite(toolCall, context);
   }
 
+  if (fn.name === 'file_read') {
+    return executeFileRead(toolCall);
+  }
+
   return {
     tool_call_id: toolCall.id,
     name: fn.name,
     result: `Error: Unknown tool "${fn.name}".`,
     success: false,
   };
+}
+
+async function executeFileRead(
+  toolCall: ToolCall
+): Promise<ToolResult> {
+  const { id, function: fn } = toolCall;
+
+  let args: { file_path?: string };
+  try {
+    args = JSON.parse(fn.arguments);
+  } catch {
+    return {
+      tool_call_id: id,
+      name: 'file_read',
+      result: 'Error: Invalid JSON in tool arguments.',
+      success: false,
+    };
+  }
+
+  const { file_path } = args;
+
+  const pathError = validateFilePath(file_path ?? '');
+  if (pathError) {
+    return {
+      tool_call_id: id,
+      name: 'file_read',
+      result: `Error: ${pathError}`,
+      success: false,
+      file_path: file_path,
+    };
+  }
+
+  try {
+    const sandbox = getActiveSandbox();
+    if (!sandbox) {
+      return {
+        tool_call_id: id,
+        name: 'file_read',
+        result: 'Error: No active sandbox. Cannot read files without a running sandbox.',
+        success: false,
+        file_path: file_path,
+      };
+    }
+
+    const content = await sandboxReadFile(file_path!);
+
+    // Add line numbers to the content
+    const lines = content.split('\n');
+    const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
+    const numberedContent = numberedLines.join('\n');
+
+    return {
+      tool_call_id: id,
+      name: 'file_read',
+      result: `File: ${file_path}\nLines: ${lines.length}\n---\n${numberedContent}`,
+      success: true,
+      file_path: file_path,
+    };
+  } catch (err) {
+    return {
+      tool_call_id: id,
+      name: 'file_read',
+      result: `Error: ${err instanceof Error ? err.message : 'Failed to read file'}`,
+      success: false,
+      file_path: file_path,
+    };
+  }
 }
 
 async function executeFileWrite(
