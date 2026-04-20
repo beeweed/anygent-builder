@@ -9,7 +9,7 @@ export function useModels() {
   const fetchedRef = useRef(false);
   const lastProviderRef = useRef<ProviderId | null>(null);
 
-  const loadModels = useCallback(async (apiKey: string, providerId: ProviderId = 'openrouter') => {
+  const loadModels = useCallback(async (apiKey: string, providerId: ProviderId = 'fireworks') => {
     if (!apiKey) return;
     setLoading(true);
     setError(null);

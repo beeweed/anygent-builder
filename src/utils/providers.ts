@@ -1,17 +1,16 @@
 import { ProviderConfig, ProviderId } from '../types';
 
+/**
+ * Providers supported by Anygent Builder.
+ *
+ * After the migration to the Vercel AI SDK the agent only uses
+ * Fireworks as the inference provider (via @ai-sdk/fireworks).
+ */
 export const PROVIDERS: ProviderConfig[] = [
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    description: 'Access 200+ models via OpenRouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    placeholder: 'sk-or-...',
-  },
   {
     id: 'fireworks',
     name: 'Fireworks AI',
-    description: 'High-speed inference with Fireworks AI',
+    description: 'High-speed inference with Fireworks AI — powered by the Vercel AI SDK',
     baseUrl: 'https://api.fireworks.ai/inference/v1',
     placeholder: 'fw_...',
   },

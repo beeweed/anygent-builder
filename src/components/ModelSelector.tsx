@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ChevronDown, Search, Cpu, Zap, Globe } from 'lucide-react';
+import { ChevronDown, Search, Cpu, Zap } from 'lucide-react';
 import { Model, ProviderId } from '../types';
 import { PROVIDERS } from '../utils/providers';
 
@@ -15,7 +15,6 @@ interface Props {
 }
 
 const PROVIDER_ICONS: Record<ProviderId, React.ReactNode> = {
-  openrouter: <Globe size={12} />,
   fireworks: <Zap size={12} />,
 };
 
@@ -84,23 +83,28 @@ export default function ModelSelector({
     }
   };
 
+  // Only one provider remains, but we keep the pill for clarity that the
+  // agent runs exclusively on Fireworks via the Vercel AI SDK.
+  const showProviderPills = PROVIDERS.length > 1;
+
   return (
     <div ref={containerRef} className="model-selector-container">
       <div className="model-selector-row">
-        {/* Provider toggle pills */}
-        <div className="provider-pills">
-          {PROVIDERS.map((p) => (
-            <button
-              key={p.id}
-              className={`provider-pill ${p.id === selectedProvider ? 'provider-pill--active' : ''}`}
-              onClick={() => onProviderChange(p.id)}
-              title={p.description}
-            >
-              {PROVIDER_ICONS[p.id]}
-              <span>{p.name}</span>
-            </button>
-          ))}
-        </div>
+        {showProviderPills && (
+          <div className="provider-pills">
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                className={`provider-pill ${p.id === selectedProvider ? 'provider-pill--active' : ''}`}
+                onClick={() => onProviderChange(p.id)}
+                title={p.description}
+              >
+                {PROVIDER_ICONS[p.id]}
+                <span>{p.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Model selector button */}
         <button onClick={handleOpen} className="model-selector-btn" title={selectedName}>
@@ -116,6 +120,7 @@ export default function ModelSelector({
           <div className="model-dropdown-provider-header">
             {PROVIDER_ICONS[selectedProvider]}
             <span>{currentProvider.name}</span>
+            <span className="model-dropdown-provider-badge">via Vercel AI SDK</span>
           </div>
 
           {/* Custom model input for Fireworks */}
@@ -176,7 +181,7 @@ export default function ModelSelector({
             ) : filtered.length === 0 ? (
               <div className="model-empty">
                 {models.length === 0
-                  ? 'No models loaded. Add your API key in Settings.'
+                  ? 'No models loaded. Add your Fireworks API key in Settings.'
                   : 'No models found'}
               </div>
             ) : (
@@ -192,11 +197,7 @@ export default function ModelSelector({
                   title={m.id}
                 >
                   <span className="model-option-name">{m.name}</span>
-                  <span className="model-option-id">
-                    {selectedProvider === 'fireworks'
-                      ? m.id
-                      : m.id.split('/')[1] || m.id}
-                  </span>
+                  <span className="model-option-id">{m.id}</span>
                 </button>
               ))
             )}

@@ -7,8 +7,8 @@ const THEME_KEY = 'anygent_theme';
 const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
   selectedModel: '',
-  selectedProvider: 'openrouter',
-  providerKeys: { openrouter: '', fireworks: '' },
+  selectedProvider: 'fireworks',
+  providerKeys: { fireworks: '' },
   fireworksCustomModel: '',
   e2bApiKey: '',
   e2bTemplate: '',
@@ -21,9 +21,11 @@ export function loadChats(): Chat[] {
     const raw = localStorage.getItem(CHATS_KEY);
     if (!raw) return [];
     const chats = JSON.parse(raw) as Chat[];
+    // Migrate old chats that may have `provider: 'openrouter'` from a previous
+    // version of the app — force everything to `fireworks`.
     return chats.map((c) => ({
       ...c,
-      provider: c.provider || 'openrouter',
+      provider: 'fireworks' as ProviderId,
     }));
   } catch {
     return [];
@@ -38,17 +40,27 @@ export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    const providerKeys: Record<ProviderId, string> = {
-      openrouter: parsed.providerKeys?.openrouter || parsed.apiKey || '',
-      fireworks: parsed.providerKeys?.fireworks || '',
+    const parsed = JSON.parse(raw) as Partial<AppSettings> & {
+      providerKeys?: Record<string, string>;
     };
+
+    // Migration: if the user previously used OpenRouter, ignore that key.
+    const fireworksKey =
+      parsed.providerKeys?.fireworks ||
+      (parsed.selectedProvider === 'fireworks' ? parsed.apiKey : '') ||
+      '';
+
+    const providerKeys: Record<ProviderId, string> = {
+      fireworks: fireworksKey,
+    };
+
     const systemPromptMode: SystemPromptMode =
       parsed.systemPromptMode === 'small' ? 'small' : 'big';
+
     return {
-      apiKey: providerKeys[parsed.selectedProvider || 'openrouter'] || parsed.apiKey || '',
+      apiKey: providerKeys.fireworks,
       selectedModel: parsed.selectedModel || '',
-      selectedProvider: parsed.selectedProvider || 'openrouter',
+      selectedProvider: 'fireworks',
       providerKeys,
       fireworksCustomModel: parsed.fireworksCustomModel || '',
       e2bApiKey: parsed.e2bApiKey || '',

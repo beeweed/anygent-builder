@@ -49,7 +49,9 @@ export interface Model {
   };
 }
 
-export type ProviderId = 'openrouter' | 'fireworks';
+// Only Fireworks is supported now — the agent is built on top of
+// the Vercel AI SDK (@ai-sdk/fireworks).
+export type ProviderId = 'fireworks';
 
 export interface ProviderConfig {
   id: ProviderId;

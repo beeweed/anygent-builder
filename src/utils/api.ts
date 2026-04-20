@@ -1,31 +1,33 @@
+/**
+ * Anygent Builder — Agent core.
+ *
+ * This module implements a fully-streaming ReAct (Reason + Act) agent
+ * powered by the Vercel AI SDK and the Fireworks provider
+ * (@ai-sdk/fireworks).
+ *
+ *   • Real-time token streaming via `streamText().textStream`.
+ *   • Native tool calling via the Vercel AI SDK `tools` parameter
+ *     (Zod-validated inputs).
+ *   • ReAct loop is driven from `App.tsx`: each iteration invokes
+ *     `agentCompletion()` once, we stream tokens + collect tool calls,
+ *     the UI executes the tools, and the resulting tool messages are
+ *     appended to history for the next iteration.
+ */
+
+import { streamText, type ModelMessage } from 'ai';
+import { createFireworks } from '@ai-sdk/fireworks';
 import { Message, Model, ProviderId, ToolCall, SystemPromptMode } from '../types';
-import { getProvider } from './providers';
 import { TOOL_DEFINITIONS } from './tools';
 import { getSystemMessage, getCompactSystemMessage } from './systemprompt';
 
-export async function fetchModels(apiKey: string, providerId: ProviderId = 'openrouter'): Promise<Model[]> {
-  const provider = getProvider(providerId);
+// ─── Model Listing ──────────────────────────────────────────────────────────
 
-  if (providerId === 'fireworks') {
-    return fetchFireworksModels(apiKey);
-  }
-
-  const res = await fetch(`${provider.baseUrl}/models`, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  });
-  if (!res.ok) throw new Error(`Failed to fetch models: ${res.statusText}`);
-  const data = await res.json();
-
-  // Normalize model data - ensure each model has a name
-  const raw = (data.data || []) as Array<Record<string, unknown>>;
-  return raw.map((m) => ({
-    id: (m.id as string) || '',
-    name: (m.name as string) || (m.id as string) || 'Unknown',
-    context_length: (m.context_length as number) || undefined,
-    pricing: m.pricing as Model['pricing'],
-  }));
+export async function fetchModels(
+  apiKey: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _providerId: ProviderId = 'fireworks'
+): Promise<Model[]> {
+  return fetchFireworksModels(apiKey);
 }
 
 // Known/featured Fireworks models that should always be available,
@@ -158,45 +160,103 @@ function formatFireworksModelName(modelId: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ─── Build API messages from our Message type ───────────────────────────────
+// ─── Message Conversion (internal → Vercel AI SDK) ──────────────────────────
 
-interface ApiMessage {
-  role: 'user' | 'assistant' | 'tool' | 'system';
-  content?: string | null;
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
-}
-
-function buildApiMessages(
+/**
+ * Convert our internal Message[] (plus a system prompt) into the
+ * `ModelMessage[]` shape expected by the Vercel AI SDK.
+ *
+ * The Vercel AI SDK expects:
+ *   - system:     { role: 'system', content: string }
+ *   - user:       { role: 'user', content: string | parts[] }
+ *   - assistant:  { role: 'assistant', content: string | parts[] }
+ *                 parts may include { type: 'tool-call', toolCallId, toolName, input }
+ *   - tool:       { role: 'tool', content: [{ type: 'tool-result', toolCallId, toolName, output }] }
+ */
+function buildModelMessages(
   messages: Message[],
   systemPromptMode: SystemPromptMode = 'big'
-): ApiMessage[] {
-  const systemMsg: ApiMessage =
+): ModelMessage[] {
+  const systemMsg =
     systemPromptMode === 'small' ? getCompactSystemMessage() : getSystemMessage();
-  const converted: ApiMessage[] = messages.map((m) => {
+
+  const converted: ModelMessage[] = [
+    { role: 'system', content: systemMsg.content },
+  ];
+
+  for (const m of messages) {
+    if (m.role === 'user') {
+      converted.push({ role: 'user', content: m.content });
+      continue;
+    }
+
+    if (m.role === 'assistant') {
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        // Assistant message with tool calls → content parts
+        const parts: Array<
+          | { type: 'text'; text: string }
+          | {
+              type: 'tool-call';
+              toolCallId: string;
+              toolName: string;
+              input: unknown;
+            }
+        > = [];
+
+        if (m.content && m.content.length > 0) {
+          parts.push({ type: 'text', text: m.content });
+        }
+
+        for (const tc of m.tool_calls) {
+          let parsedArgs: unknown = {};
+          try {
+            parsedArgs = tc.function.arguments
+              ? JSON.parse(tc.function.arguments)
+              : {};
+          } catch {
+            parsedArgs = {};
+          }
+          parts.push({
+            type: 'tool-call',
+            toolCallId: tc.id,
+            toolName: tc.function.name,
+            input: parsedArgs,
+          });
+        }
+
+        converted.push({
+          role: 'assistant',
+          content: parts,
+        } as ModelMessage);
+      } else {
+        converted.push({
+          role: 'assistant',
+          content: m.content || '',
+        });
+      }
+      continue;
+    }
+
     if (m.role === 'tool') {
-      return {
-        role: 'tool' as const,
-        content: m.content,
-        tool_call_id: m.tool_call_id || '',
-      };
+      converted.push({
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: m.tool_call_id || '',
+            toolName: m.tool_name || 'unknown',
+            output: { type: 'text', value: m.content },
+          },
+        ],
+      } as ModelMessage);
+      continue;
     }
-    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-      return {
-        role: 'assistant' as const,
-        content: m.content || null,
-        tool_calls: m.tool_calls,
-      };
-    }
-    return {
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    };
-  });
-  return [systemMsg, ...converted];
+  }
+
+  return converted;
 }
 
-// ─── Agent Completion (ReAct loop with tool calling) ────────────────────────
+// ─── Agent Completion (single turn of the ReAct loop) ───────────────────────
 
 export interface AgentCallbacks {
   onToken: (token: string) => void;
@@ -206,397 +266,163 @@ export interface AgentCallbacks {
 }
 
 /**
- * Single-turn completion that may return streamed text OR tool_calls.
- * ROBUST SSE streaming - proper token-by-token, no compromise.
+ * Run a single completion turn. Streams assistant tokens in real time via
+ * Vercel AI SDK's `streamText`, and collects any tool calls the model emits.
+ *
+ * The outer ReAct loop lives in `App.tsx`: after this function returns any
+ * tool calls, the UI executes them locally (file_read/file_write), appends
+ * the tool results to history, and calls `agentCompletion()` again.
  */
 export async function agentCompletion(
   apiKey: string,
   model: string,
   messages: Message[],
   callbacks: AgentCallbacks,
-  providerId: ProviderId = 'openrouter',
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _providerId: ProviderId = 'fireworks',
   enableTools: boolean = true,
   systemPromptMode: SystemPromptMode = 'big',
   signal?: AbortSignal
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
-  const provider = getProvider(providerId);
+  const modelMessages = buildModelMessages(messages, systemPromptMode);
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-    Accept: 'text/event-stream',
-  };
+  const fireworks = createFireworks({ apiKey });
 
-  if (providerId === 'openrouter') {
-    headers['HTTP-Referer'] = window.location.origin;
-    headers['X-Title'] = 'Anygent Builder';
-  }
+  const tools = enableTools ? TOOL_DEFINITIONS : undefined;
 
-  const apiMessages = buildApiMessages(messages, systemPromptMode);
-
-  const body: Record<string, unknown> = {
-    model,
-    messages: apiMessages,
-    stream: true,
-    // Ensure OpenAI-compatible providers include usage at end
-    stream_options: { include_usage: false },
-  };
-
-  if (enableTools) {
-    body.tools = TOOL_DEFINITIONS;
-    body.tool_choice = 'auto';
-  }
-
-  let res: Response;
-  try {
-    res = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal,
-    });
-  } catch (networkErr) {
-    if (signal?.aborted) return { content: '', toolCalls: [] };
-    const errMsg = networkErr instanceof Error ? networkErr.message : 'Network error';
-    callbacks.onError(`Network error: ${errMsg}`);
-    return { content: '', toolCalls: [] };
-  }
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => null);
-    const errMsg = errData?.error?.message || res.statusText;
-    const statusCode = res.status;
-
-    // If 400/422 with tools, retry without streaming/tools
-    if (enableTools && (statusCode === 400 || statusCode === 422)) {
-      const nonStreamResult = await tryNonStreaming(
-        provider.baseUrl,
-        headers,
-        apiMessages,
-        model,
-        true,
-        callbacks,
-        signal
-      );
-      if (nonStreamResult) return nonStreamResult;
-
-      const noToolsResult = await tryNonStreaming(
-        provider.baseUrl,
-        headers,
-        apiMessages,
-        model,
-        false,
-        callbacks,
-        signal
-      );
-      if (noToolsResult) return noToolsResult;
-    }
-
-    if (statusCode === 401) {
-      callbacks.onError('Invalid API key. Please check your API key in Settings.');
-      return { content: '', toolCalls: [] };
-    }
-    if (statusCode === 402) {
-      callbacks.onError('Insufficient credits. Please add credits to your account.');
-      return { content: '', toolCalls: [] };
-    }
-    if (statusCode === 429) {
-      callbacks.onError('Rate limited. Please wait a moment and try again.');
-      return { content: '', toolCalls: [] };
-    }
-
-    callbacks.onError(errMsg);
-    return { content: '', toolCalls: [] };
-  }
-
-  // Check content type - if JSON, the provider ignored streaming
-  const contentType = (res.headers.get('content-type') || '').toLowerCase();
-  if (contentType.includes('application/json') && !contentType.includes('stream')) {
-    return handleJsonResponse(res, callbacks);
-  }
-
-  // Robust SSE streaming
-  return handleStreamingResponse(res, callbacks, signal);
-}
-
-/**
- * Fallback: non-streaming request
- */
-async function tryNonStreaming(
-  baseUrl: string,
-  headers: Record<string, string>,
-  apiMessages: ApiMessage[],
-  model: string,
-  withTools: boolean,
-  callbacks: AgentCallbacks,
-  signal?: AbortSignal
-): Promise<{ content: string; toolCalls: ToolCall[] } | null> {
-  const body: Record<string, unknown> = {
-    model,
-    messages: apiMessages,
-    stream: false,
-  };
-
-  if (withTools) {
-    body.tools = TOOL_DEFINITIONS;
-    body.tool_choice = 'auto';
-  }
+  let accumulated = '';
+  const toolCalls: ToolCall[] = [];
 
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal,
+    const result = streamText({
+      model: fireworks(model),
+      messages: modelMessages,
+      tools,
+      // We never loop inside streamText itself — our ReAct loop in App.tsx
+      // handles subsequent turns after tool execution.
+      stopWhen: undefined,
+      abortSignal: signal,
     });
 
-    if (!res.ok) return null;
-    return handleJsonResponse(res, callbacks);
-  } catch {
-    return null;
-  }
-}
+    // Walk the full event stream: we get text deltas, tool-call events,
+    // finish events, and errors — all through one unified iterator.
+    for await (const part of result.fullStream) {
+      if (signal?.aborted) break;
 
-/**
- * Handle a JSON (non-streaming) response
- */
-async function handleJsonResponse(
-  res: Response,
-  callbacks: AgentCallbacks
-): Promise<{ content: string; toolCalls: ToolCall[] }> {
-  try {
-    const data = await res.json();
-    const choice = data.choices?.[0];
+      switch (part.type) {
+        case 'text-delta': {
+          // In ai v6 the incremental text field is `text`.
+          // Fallback to `textDelta` if the runtime version differs.
+          const delta =
+            // @ts-expect-error — support both shapes across SDK versions
+            (part.text as string | undefined) ?? (part.textDelta as string | undefined) ?? '';
+          if (delta) {
+            accumulated += delta;
+            callbacks.onToken(delta);
+          }
+          break;
+        }
 
-    if (!choice) {
-      callbacks.onError('No response from model');
-      return { content: '', toolCalls: [] };
-    }
+        case 'reasoning-delta': {
+          // Some reasoning models expose a separate reasoning stream —
+          // surface it to the UI as ordinary tokens so users can see the
+          // model "think" in real time.
+          const delta =
+            // @ts-expect-error — support both shapes across SDK versions
+            (part.text as string | undefined) ?? (part.textDelta as string | undefined) ?? '';
+          if (delta) {
+            accumulated += delta;
+            callbacks.onToken(delta);
+          }
+          break;
+        }
 
-    const message = choice.message || choice.delta || {};
-    const content = message.content || '';
-    const rawToolCalls = message.tool_calls || [];
+        case 'tool-call': {
+          const p = part as unknown as {
+            toolCallId: string;
+            toolName: string;
+            input?: unknown;
+            args?: unknown;
+          };
+          const rawArgs = p.input ?? p.args ?? {};
+          const argsStr =
+            typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs);
+          toolCalls.push({
+            id: p.toolCallId,
+            type: 'function',
+            function: {
+              name: p.toolName,
+              arguments: argsStr,
+            },
+          });
+          break;
+        }
 
-    if (content) {
-      // Simulate streaming by chunking large content (keeps UI feel consistent)
-      const chunkSize = 8;
-      for (let i = 0; i < content.length; i += chunkSize) {
-        callbacks.onToken(content.slice(i, i + chunkSize));
+        case 'error': {
+          const err = (part as unknown as { error: unknown }).error;
+          const msg =
+            err instanceof Error
+              ? err.message
+              : typeof err === 'string'
+                ? err
+                : 'Stream error';
+          callbacks.onError(msg);
+          return { content: accumulated, toolCalls };
+        }
+
+        case 'finish':
+        case 'finish-step':
+          // handled via final awaits below
+          break;
+
+        default:
+          break;
       }
     }
-
-    const toolCalls: ToolCall[] = rawToolCalls.map((tc: Record<string, unknown>) => ({
-      id: (tc.id as string) || `tc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      type: 'function' as const,
-      function: {
-        name: (tc.function as Record<string, string>)?.name || '',
-        arguments: (tc.function as Record<string, string>)?.arguments || '{}',
-      },
-    }));
 
     if (toolCalls.length > 0) {
       callbacks.onToolCall(toolCalls);
     }
 
-    return { content, toolCalls };
+    return { content: accumulated, toolCalls };
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : 'Failed to parse response';
-    callbacks.onError(errMsg);
-    return { content: '', toolCalls: [] };
-  }
-}
-
-/**
- * Handle a streaming (SSE) response - ROBUST implementation.
- *
- * Properly handles:
- *   - \r\n and \n line endings
- *   - SSE comment lines (starting with ":") used for keep-alive
- *   - Multi-line data fields (though OpenAI never sends them)
- *   - Partial UTF-8 sequences across chunks (via TextDecoder stream mode)
- *   - Malformed JSON (skipped)
- *   - Abort signals
- *   - Missing [DONE] marker
- */
-async function handleStreamingResponse(
-  res: Response,
-  callbacks: AgentCallbacks,
-  signal?: AbortSignal
-): Promise<{ content: string; toolCalls: ToolCall[] }> {
-  const reader = res.body?.getReader();
-  if (!reader) {
-    callbacks.onError('No response body');
-    return { content: '', toolCalls: [] };
-  }
-
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  let contentAccum = '';
-  const toolCallsMap: Map<
-    number,
-    { id: string; type: string; function: { name: string; arguments: string } }
-  > = new Map();
-
-  // Abort handler
-  const onAbort = () => {
-    try {
-      reader.cancel();
-    } catch {
-      // ignore
-    }
-  };
-  signal?.addEventListener('abort', onAbort);
-
-  try {
-    while (true) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      // Decode incrementally (stream: true preserves partial multi-byte chars)
-      buffer += decoder.decode(value, { stream: true });
-
-      // Normalize line endings - SSE uses \n but some proxies inject \r\n
-      buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-      // SSE events are separated by blank lines (\n\n).
-      // But in practice each "data: ..." line ends with \n and we can parse per-line too,
-      // because OpenAI never sends multi-line data payloads. Parse per line for robustness.
-      let newlineIdx: number;
-      while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newlineIdx);
-        buffer = buffer.slice(newlineIdx + 1);
-
-        // Skip empty lines (event delimiters) and SSE comments (keep-alives)
-        if (line.length === 0) continue;
-        if (line.startsWith(':')) continue;
-
-        // Only handle "data:" fields (ignore "event:", "id:", "retry:" etc.)
-        if (!line.startsWith('data:')) continue;
-
-        // Strip "data:" prefix and optional single leading space
-        let payload = line.slice(5);
-        if (payload.startsWith(' ')) payload = payload.slice(1);
-
-        if (payload === '[DONE]') {
-          const toolCalls = buildToolCallsFromMap(toolCallsMap);
-          if (toolCalls.length > 0) callbacks.onToolCall(toolCalls);
-          signal?.removeEventListener('abort', onAbort);
-          return { content: contentAccum, toolCalls };
-        }
-
-        if (!payload) continue;
-
-        try {
-          const parsed = JSON.parse(payload);
-
-          if (parsed.error) {
-            callbacks.onError(parsed.error.message || 'Stream error');
-            signal?.removeEventListener('abort', onAbort);
-            return { content: contentAccum, toolCalls: [] };
-          }
-
-          const choice = parsed.choices?.[0];
-          if (!choice) continue;
-
-          const delta = choice.delta || choice.message;
-          if (!delta) continue;
-
-          // Emit content token IMMEDIATELY — no buffering, no throttling
-          if (typeof delta.content === 'string' && delta.content.length > 0) {
-            contentAccum += delta.content;
-            callbacks.onToken(delta.content);
-          }
-
-          // Some providers send `reasoning_content` (DeepSeek) — treat as content too
-          if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
-            contentAccum += delta.reasoning_content;
-            callbacks.onToken(delta.reasoning_content);
-          }
-
-          // Tool-call deltas (OpenAI-style, incremental JSON via `arguments`)
-          if (Array.isArray(delta.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              const idx = typeof tc.index === 'number' ? tc.index : 0;
-              if (!toolCallsMap.has(idx)) {
-                toolCallsMap.set(idx, {
-                  id: tc.id || `tc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                  type: tc.type || 'function',
-                  function: { name: '', arguments: '' },
-                });
-              }
-              const existing = toolCallsMap.get(idx)!;
-              if (tc.id) existing.id = tc.id;
-              if (tc.type) existing.type = tc.type;
-              if (tc.function?.name) existing.function.name += tc.function.name;
-              if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
-            }
-          }
-        } catch {
-          // malformed JSON in a data chunk — skip
-        }
-      }
-    }
-
-    // Drain any final bytes out of the decoder
-    const tail = decoder.decode();
-    if (tail) buffer += tail;
-
-    // Process any leftover in buffer (last line without trailing \n)
-    if (buffer.length > 0) {
-      const trimmed = buffer.trim();
-      if (trimmed.startsWith('data:')) {
-        const payload = trimmed.slice(5).trim();
-        if (payload && payload !== '[DONE]') {
-          try {
-            const parsed = JSON.parse(payload);
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta?.content) {
-              contentAccum += delta.content;
-              callbacks.onToken(delta.content);
-            }
-          } catch {
-            // skip
-          }
-        }
-      }
-    }
-  } catch (err) {
-    signal?.removeEventListener('abort', onAbort);
     if (signal?.aborted) {
-      return { content: contentAccum, toolCalls: buildToolCallsFromMap(toolCallsMap) };
+      return { content: accumulated, toolCalls };
     }
-    if (contentAccum) {
-      return { content: contentAccum, toolCalls: buildToolCallsFromMap(toolCallsMap) };
-    }
-    const errMsg = err instanceof Error ? err.message : 'Stream read error';
-    callbacks.onError(errMsg);
-    return { content: '', toolCalls: [] };
+    const msg = extractErrorMessage(err);
+    callbacks.onError(msg);
+    return { content: accumulated, toolCalls };
   }
-
-  signal?.removeEventListener('abort', onAbort);
-  const toolCalls = buildToolCallsFromMap(toolCallsMap);
-  if (toolCalls.length > 0) callbacks.onToolCall(toolCalls);
-  return { content: contentAccum, toolCalls };
 }
 
-function buildToolCallsFromMap(
-  map: Map<number, { id: string; type: string; function: { name: string; arguments: string } }>
-): ToolCall[] {
-  if (map.size === 0) return [];
-  const result: ToolCall[] = [];
-  const sorted = [...map.entries()].sort((a, b) => a[0] - b[0]);
-  for (const [, val] of sorted) {
-    result.push({
-      id: val.id,
-      type: 'function',
-      function: {
-        name: val.function.name,
-        arguments: val.function.arguments,
-      },
-    });
+function extractErrorMessage(err: unknown): string {
+  if (!err) return 'Unknown error';
+  if (err instanceof Error) {
+    // Vercel AI SDK errors often carry rich metadata on `cause` / `data`.
+    const anyErr = err as Error & {
+      statusCode?: number;
+      data?: { error?: { message?: string } };
+    };
+    if (anyErr.statusCode === 401) {
+      return 'Invalid API key. Please check your Fireworks API key in Settings.';
+    }
+    if (anyErr.statusCode === 402) {
+      return 'Insufficient credits. Please add credits to your Fireworks account.';
+    }
+    if (anyErr.statusCode === 429) {
+      return 'Rate limited. Please wait a moment and try again.';
+    }
+    if (anyErr.data?.error?.message) {
+      return anyErr.data.error.message;
+    }
+    return err.message;
   }
-  return result;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return 'Unknown error';
+  }
 }
 
 // ─── Legacy streaming (kept for backward compat) ────────────────────────────
@@ -608,7 +434,7 @@ export async function streamCompletion(
   onToken: (token: string) => void,
   onDone: () => void,
   onError: (err: string) => void,
-  providerId: ProviderId = 'openrouter'
+  providerId: ProviderId = 'fireworks'
 ): Promise<void> {
   await agentCompletion(
     apiKey,

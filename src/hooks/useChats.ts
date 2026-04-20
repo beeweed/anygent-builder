@@ -9,7 +9,7 @@ export function useChats() {
     return stored.length > 0 ? stored[0].id : null;
   });
 
-  const createChat = useCallback((model: string, provider: ProviderId = 'openrouter'): string => {
+  const createChat = useCallback((model: string, provider: ProviderId = 'fireworks'): string => {
     const id = generateId();
     const newChat: Chat = {
       id,

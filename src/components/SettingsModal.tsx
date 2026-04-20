@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Eye, EyeOff, Globe, Zap, Box, FileText, Layers } from 'lucide-react';
+import { X, Eye, EyeOff, Zap, Box, FileText, Layers } from 'lucide-react';
 import { ProviderId, SystemPromptMode } from '../types';
 import { PROVIDERS } from '../utils/providers';
 
@@ -18,7 +18,6 @@ interface Props {
 }
 
 const PROVIDER_ICONS: Record<ProviderId, React.ReactNode> = {
-  openrouter: <Globe size={14} />,
   fireworks: <Zap size={14} />,
 };
 
@@ -35,7 +34,6 @@ export default function SettingsModal({
   const [template, setTemplate] = useState(e2bTemplate);
   const [promptMode, setPromptMode] = useState<SystemPromptMode>(systemPromptMode);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({
-    openrouter: false,
     fireworks: false,
     e2b: false,
   });
@@ -50,8 +48,7 @@ export default function SettingsModal({
 
   const handleSave = () => {
     const trimmed: Record<ProviderId, string> = {
-      openrouter: keys.openrouter.trim(),
-      fireworks: keys.fireworks.trim(),
+      fireworks: (keys.fireworks || '').trim(),
     };
     onSave(trimmed, e2bKey.trim(), template.trim(), promptMode);
     onClose();
@@ -78,7 +75,7 @@ export default function SettingsModal({
               <div className="modal-input-wrapper">
                 <input
                   type={showKeys[provider.id] ? 'text' : 'password'}
-                  value={keys[provider.id]}
+                  value={keys[provider.id] || ''}
                   onChange={(e) =>
                     setKeys((prev) => ({ ...prev, [provider.id]: e.target.value }))
                   }

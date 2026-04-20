@@ -62,7 +62,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [selectedModel, setSelectedModel] = useState<string>(() => loadSettings().selectedModel);
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>(
-    () => loadSettings().selectedProvider || 'openrouter'
+    () => loadSettings().selectedProvider || 'fireworks'
   );
   const [theme, setTheme] = useState<ThemeMode>(() => settings.theme || 'dark');
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
@@ -140,19 +140,12 @@ export default function App() {
 
   useEffect(() => {
     if (models.length > 0 && !selectedModel) {
-      let defaultModel;
-      if (selectedProvider === 'openrouter') {
-        defaultModel =
-          models.find((m) => m.id.includes('gpt-4o-mini')) ||
-          models.find((m) => m.id.includes('gpt-4o')) ||
-          models.find((m) => m.id.includes('claude')) ||
-          models[0];
-      } else {
-        defaultModel =
-          models.find((m) => m.id.includes('llama')) ||
-          models.find((m) => m.id.includes('deepseek')) ||
-          models[0];
-      }
+      // Fireworks-only now (via Vercel AI SDK).
+      const defaultModel =
+        models.find((m) => m.id.includes('qwen3-coder')) ||
+        models.find((m) => m.id.includes('deepseek-v3')) ||
+        models.find((m) => m.id.includes('llama')) ||
+        models[0];
       if (defaultModel) {
         setSelectedModel(defaultModel.id);
         const updated = { ...settings, selectedModel: defaultModel.id };

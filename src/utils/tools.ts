@@ -1,53 +1,45 @@
+import { tool } from 'ai';
+import { z } from 'zod';
 import { ToolCall, ToolResult } from '../types';
 import { FSNode, FSFile } from '../types/fs';
 import { sandboxWriteFile, sandboxReadFile, getActiveSandbox } from './e2b';
 
-// ─── Tool Definitions (sent to the LLM API) ────────────────────────────────
+// ─── Tool Definitions (Vercel AI SDK format, Zod-validated) ────────────────
+//
+// The Vercel AI SDK automatically converts these into the JSON Schema that
+// Fireworks (and every other OpenAI-compatible provider) expects, so we no
+// longer have to hand-craft the `parameters` object.
 
-export const TOOL_DEFINITIONS = [
-  {
-    type: 'function' as const,
-    function: {
-      name: 'file_write',
-      description:
-        'Create or overwrite a file at the given path inside the sandbox. Use for creating new files or fully rewriting existing ones.',
-      parameters: {
-        type: 'object',
-        properties: {
-          file_path: {
-            type: 'string',
-            description:
-              'Absolute path starting with /home/user/. Example: /home/user/project/src/App.tsx',
-          },
-          content: {
-            type: 'string',
-            description: 'The full content to write to the file.',
-          },
-        },
-        required: ['file_path', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'file_read',
-      description:
-        'Read the content of an existing file from the sandbox. Returns content with line numbers.',
-      parameters: {
-        type: 'object',
-        properties: {
-          file_path: {
-            type: 'string',
-            description:
-              'Absolute path starting with /home/user/. Example: /home/user/project/src/main.py',
-          },
-        },
-        required: ['file_path'],
-      },
-    },
-  },
-];
+export const TOOL_DEFINITIONS = {
+  file_write: tool({
+    description:
+      'Create or overwrite a file at the given path inside the sandbox. Use for creating new files or fully rewriting existing ones.',
+    inputSchema: z.object({
+      file_path: z
+        .string()
+        .describe(
+          'Absolute path starting with /home/user/. Example: /home/user/project/src/App.tsx'
+        ),
+      content: z.string().describe('The full content to write to the file.'),
+    }),
+    // The SDK requires an `execute` function for server-side execution,
+    // but in Anygent Builder we intentionally run tools on the client side
+    // after each streaming turn (so the UI can reflect FS state & update
+    // the E2B sandbox). We therefore leave `execute` undefined and rely on
+    // `executeToolCall` below, invoked from the App's ReAct loop.
+  }),
+  file_read: tool({
+    description:
+      'Read the content of an existing file from the sandbox. Returns content with line numbers.',
+    inputSchema: z.object({
+      file_path: z
+        .string()
+        .describe(
+          'Absolute path starting with /home/user/. Example: /home/user/project/src/main.py'
+        ),
+    }),
+  }),
+};
 
 // ─── Path Validation ────────────────────────────────────────────────────────
 

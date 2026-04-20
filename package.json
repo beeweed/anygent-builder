@@ -11,14 +11,17 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
+    "@ai-sdk/fireworks": "^2.0.46",
     "@e2b/code-interpreter": "^2.4.0",
     "@monaco-editor/react": "^4.7.0",
     "@supabase/supabase-js": "^2.57.4",
+    "ai": "^6.0.168",
     "e2b": "^2.19.0",
     "git": "^0.1.5",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
