@@ -56,10 +56,19 @@ export default function App() {
     addMessages,
     updateLastAssistantMessage,
     finalizeAssistantMessage,
+    attachToolResultToAssistant,
     updateChatModel,
     updateChatProvider,
     updateChatSandboxId,
   } = useChats();
+
+  // Tool-call ids that are currently executing. Used by MessageItem to
+  // render a spinning "running" chip immediately when the model invokes
+  // a slow tool (e.g. file_editor over the network), so the UI never
+  // *feels* frozen even if the tool itself takes a couple seconds.
+  const [runningToolCallIds, setRunningToolCallIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const { models, loading: modelsLoading, loadModels, clearModels } = useModels();
   const isDesktop = useIsDesktop();
@@ -333,6 +342,7 @@ export default function App() {
     }
     setStreaming(false);
     setStreamingMsgId(null);
+    setRunningToolCallIds(new Set());
     streamChatIdRef.current = null;
   }, []);
 
@@ -469,42 +479,78 @@ export default function App() {
           };
           history = [...history, assistantHistoryMsg];
 
+          // Mark every tool call as "running" *before* we start executing
+          // them. This paints the spinning chips in the chat immediately so
+          // the user sees that a slow tool (file_editor, Read) is in flight,
+          // instead of staring at a frozen UI while the network round-trips.
+          setRunningToolCallIds((prev) => {
+            const next = new Set(prev);
+            for (const tc of toolCalls) next.add(tc.id);
+            return next;
+          });
+
+          const context: ToolExecutionContext = {
+            fsTree: fsTreeRef.current,
+            onTreeChange: (newTree) => {
+              setFsTree(newTree);
+              fsTreeRef.current = newTree;
+            },
+            onFileCreated: (file) => {
+              setActiveFile(file);
+            },
+          };
+
+          // Execute all tool calls in the batch in parallel. Each one runs
+          // its own awaited E2B round-trip, so Promise.all lets them overlap
+          // instead of serializing. As soon as *each* tool finishes we flip
+          // its chip from "running" → "success"/"error" independently.
+          const toolResults = await Promise.all(
+            toolCalls.map(async (tc) => {
+              if (abortController.signal.aborted) {
+                return { tc, result: null as null };
+              }
+              try {
+                const result = await executeToolCall(tc, context);
+                attachToolResultToAssistant(chatId, assistantMsgId, tc.id, result);
+                return { tc, result };
+              } finally {
+                setRunningToolCallIds((prev) => {
+                  if (!prev.has(tc.id)) return prev;
+                  const next = new Set(prev);
+                  next.delete(tc.id);
+                  return next;
+                });
+              }
+            })
+          );
+
+          if (abortController.signal.aborted) break;
+
           const toolResultMessages: Message[] = [];
-          for (const tc of toolCalls) {
-            if (abortController.signal.aborted) break;
-
-            const context: ToolExecutionContext = {
-              fsTree: fsTreeRef.current,
-              onTreeChange: (newTree) => {
-                setFsTree(newTree);
-                fsTreeRef.current = newTree;
-              },
-              onFileCreated: (file) => {
-                setActiveFile(file);
-              },
-            };
-
-            const toolResult = await executeToolCall(tc, context);
-
+          for (const { tc, result } of toolResults) {
+            if (!result) continue;
             const toolMsg: Message = {
               id: generateId(),
               role: 'tool',
-              content: toolResult.result,
+              content: result.result,
               timestamp: Date.now(),
               tool_call_id: tc.id,
-              tool_name: toolResult.name,
-              tool_result: toolResult,
+              tool_name: result.name,
+              tool_result: result,
             };
-
             toolResultMessages.push(toolMsg);
             history = [...history, toolMsg];
           }
 
           addMessages(chatId, toolResultMessages);
 
-          // Refresh sandbox files after tool execution
+          // Refresh the sandbox file tree in the BACKGROUND (fire-and-forget)
+          // so the next agent iteration isn't blocked by two sequential `find`
+          // commands (each up to 10s). The in-memory tree was already updated
+          // by the file_write / file_editor tools via `context.onTreeChange`,
+          // so the UI is consistent without waiting.
           if (getActiveSandbox()) {
-            await refreshSandboxFiles();
+            void refreshSandboxFiles();
           }
 
           setStreamingMsgId(null);
@@ -519,6 +565,7 @@ export default function App() {
       } finally {
         setStreaming(false);
         setStreamingMsgId(null);
+        setRunningToolCallIds(new Set());
         streamChatIdRef.current = null;
         abortControllerRef.current = null;
       }
@@ -538,6 +585,7 @@ export default function App() {
       addMessages,
       updateLastAssistantMessage,
       finalizeAssistantMessage,
+      attachToolResultToAssistant,
       refreshSandboxFiles,
       ensureSandboxForChat,
     ]
@@ -731,7 +779,11 @@ export default function App() {
         <div className="workspace">
           <div className="chat-panel">
             <div className="chat-container">
-              <ChatArea chat={activeChat} streamingMessageId={streamingMsgId} />
+              <ChatArea
+                chat={activeChat}
+                streamingMessageId={streamingMsgId}
+                runningToolCallIds={runningToolCallIds}
+              />
             </div>
 
             <InputBox

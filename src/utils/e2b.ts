@@ -198,6 +198,11 @@ const EXCLUDE_FIND_ARGS = SYSTEM_EXCLUDES.map(
 
 /**
  * List ONLY user files in the sandbox (no system files).
+ *
+ * Uses a *single* `find -printf` call (instead of two separate finds) so the
+ * UI only pays one network round-trip when refreshing the file tree after a
+ * tool call. `%y\t%p` emits: `d\t/path/to/dir` or `f\t/path/to/file`, giving
+ * us type + path in one shot.
  */
 export async function sandboxListFiles(
   basePath: string = '/home/user'
@@ -207,30 +212,27 @@ export async function sandboxListFiles(
 
   try {
     const result = await sandbox.commands.run(
-      `find ${basePath} -maxdepth 6 ${EXCLUDE_FIND_ARGS} 2>/dev/null | head -500`,
-      { timeoutMs: 10000 }
+      `find ${basePath} -maxdepth 6 ${EXCLUDE_FIND_ARGS} -printf '%y\\t%p\\n' 2>/dev/null | head -500`,
+      { timeoutMs: 8000 }
     );
 
-    const lines = result.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l && l !== basePath);
+    const paths: string[] = [];
+    const dirs = new Set<string>();
 
-    if (lines.length === 0) return [];
+    for (const raw of result.stdout.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      const tabIdx = line.indexOf('\t');
+      if (tabIdx < 1) continue;
+      const type = line.slice(0, tabIdx);
+      const path = line.slice(tabIdx + 1);
+      if (!path || path === basePath) continue;
+      paths.push(path);
+      if (type === 'd') dirs.add(path);
+    }
 
-    const dirResult = await sandbox.commands.run(
-      `find ${basePath} -maxdepth 6 -type d ${EXCLUDE_FIND_ARGS} 2>/dev/null | head -500`,
-      { timeoutMs: 10000 }
-    );
-
-    const dirs = new Set(
-      dirResult.stdout
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-    );
-
-    return buildTreeFromPaths(lines, dirs, basePath);
+    if (paths.length === 0) return [];
+    return buildTreeFromPaths(paths, dirs, basePath);
   } catch {
     return [];
   }

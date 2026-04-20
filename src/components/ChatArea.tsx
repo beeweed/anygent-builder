@@ -6,9 +6,10 @@ import MessageItem from './MessageItem';
 interface Props {
   chat: Chat | null;
   streamingMessageId: string | null;
+  runningToolCallIds?: Set<string>;
 }
 
-export default function ChatArea({ chat, streamingMessageId }: Props) {
+export default function ChatArea({ chat, streamingMessageId, runningToolCallIds }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -41,6 +42,7 @@ export default function ChatArea({ chat, streamingMessageId }: Props) {
           key={msg.id}
           message={msg}
           isStreaming={msg.id === streamingMessageId}
+          runningToolCallIds={runningToolCallIds}
         />
       ))}
       <div ref={bottomRef} className="scroll-anchor" />

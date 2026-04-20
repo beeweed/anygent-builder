@@ -126,6 +126,37 @@ export function useChats() {
     []
   );
 
+  // Attach a tool_result to a specific assistant message (identified by its
+  // id) under `tool_results[tool_call_id]`. Used by the live tool-execution
+  // pipeline so each chip can flip from "running" → "success" / "error" the
+  // moment its own tool finishes, independent of the other tools in the batch.
+  const attachToolResultToAssistant = useCallback(
+    (
+      chatId: string,
+      assistantMessageId: string,
+      toolCallId: string,
+      result: import('../types').ToolResult
+    ) => {
+      setChats((prev) => {
+        const updated = prev.map((c) => {
+          if (c.id !== chatId) return c;
+          const messages = c.messages.map((m) => {
+            if (m.id !== assistantMessageId) return m;
+            const existing = m.tool_results || {};
+            return {
+              ...m,
+              tool_results: { ...existing, [toolCallId]: result },
+            };
+          });
+          return { ...c, messages, updatedAt: Date.now() };
+        });
+        saveChats(updated);
+        return updated;
+      });
+    },
+    []
+  );
+
   const getMessages = useCallback(
     (chatId: string): Message[] => {
       const chat = chats.find((c) => c.id === chatId);
@@ -172,6 +203,7 @@ export function useChats() {
     addMessages,
     updateLastAssistantMessage,
     finalizeAssistantMessage,
+    attachToolResultToAssistant,
     getMessages,
     updateChatModel,
     updateChatProvider,

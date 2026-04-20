@@ -26,6 +26,10 @@ export interface Message {
   tool_call_id?: string;
   tool_name?: string;
   tool_result?: ToolResult;
+  // Map of tool_call_id -> result, kept on the *assistant* message so the
+  // UI can render per-chip success / error state without having to cross-
+  // reference sibling `tool` messages.
+  tool_results?: Record<string, ToolResult>;
 }
 
 export interface Chat {
