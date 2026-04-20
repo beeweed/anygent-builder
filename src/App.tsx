@@ -4,7 +4,12 @@ import { useChats } from './hooks/useChats';
 import { useModels } from './hooks/useModels';
 import { loadSettings, saveSettings, generateId, saveTheme } from './utils/storage';
 import { agentCompletion } from './utils/api';
-import { executeToolCall, ToolExecutionContext } from './utils/tools';
+import {
+  executeToolCall,
+  ToolExecutionContext,
+  setActiveToolChatId,
+  resetReadFilesForChat,
+} from './utils/tools';
 import {
   createSandboxForChat,
   destroySandboxForChat,
@@ -110,6 +115,7 @@ export default function App() {
   useEffect(() => {
     if (activeChatId) {
       setE2bActiveChatId(activeChatId);
+      setActiveToolChatId(activeChatId);
       if (hasSandbox(activeChatId)) {
         const chat = chats.find((c) => c.id === activeChatId);
         setSandboxState({
@@ -350,6 +356,10 @@ export default function App() {
         chatId = createChat(selectedModel, selectedProvider);
       }
 
+      // Make sure tool-level state (read-before-edit tracking) is scoped to
+      // this chat for the duration of the ReAct loop.
+      setActiveToolChatId(chatId);
+
       const userMsg: Message = {
         id: generateId(),
         role: 'user',
@@ -534,12 +544,14 @@ export default function App() {
   );
 
   const handleNewChat = useCallback(() => {
-    createChat(selectedModel, selectedProvider);
-    // Reset file tree for new chat
+    const newId = createChat(selectedModel, selectedProvider);
+    // Reset file tree & read-tracking for new chat
     setFsTree([]);
     setActiveFile(null);
     setSandboxState({ status: 'idle', sandboxId: null, error: null });
     setIterationCount(0);
+    resetReadFilesForChat(newId);
+    setActiveToolChatId(newId);
     if (!isDesktop) setSidebarOpen(false);
   }, [createChat, selectedModel, selectedProvider, isDesktop]);
 

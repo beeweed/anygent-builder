@@ -454,18 +454,34 @@ PARAMETERS:
   - file_path (string, required): Absolute path starting with /home/user/
   - content (string, required): The full content to write to the file
 
-TOOL 2: file_read
-PURPOSE: Read the content of an existing file from the sandbox filesystem. Returns content with line numbers.
+TOOL 2: Read
+PURPOSE: Read the content of an existing file from the sandbox filesystem. Returns content with line-number prefixes (format: spaces + line number + tab + content).
 PARAMETERS:
   - file_path (string, required): Absolute path starting with /home/user/. Example: /home/user/project/src/main.py
 
-IMPORTANT RULES FOR file_read:
-- ALWAYS call file_read when you need to see the contents of a file
+IMPORTANT RULES FOR Read:
+- ALWAYS call Read when you need to see the contents of a file
 - NEVER guess or hallucinate file contents — always read the actual file
 - NEVER simulate a tool call in text — let the native tool calling mechanism handle it
-- Use file_read before modifying existing files to understand their current state
-- Use file_read to debug issues by examining the actual file contents
-- The tool returns file content with line numbers for easy reference
+- Use Read before modifying existing files to understand their current state
+- Use Read to debug issues by examining the actual file contents
+- Calling Read marks the file as "read" for this conversation, which is REQUIRED before you can use file_editor on it
+
+TOOL 3: file_editor
+PURPOSE: file editor tool for editing any type of files use this tool when you required to edit file and if you want to update application
+PARAMETERS:
+  - file_path (string, required): The absolute path to the file to modify
+  - old_string (string, required): The text to replace
+  - new_string (string, required): The text to replace it with (must be different from old_string)
+  - replace_all (boolean, optional, default false): Replace all occurences of old_string
+
+[Usage:
+- You must use your \`Read\` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked
+- The edit will FAIL if \`old_string\` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use \`replace_all\` to change every instance of \`old_string\`
+- Use \`replace_all\` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance]
 
 RULES FOR FILE MANAGEMENT:
 
@@ -866,14 +882,29 @@ ARCHITECTURE:
 - Input validation on forms and endpoints
 
 TOOLS:
-1. file_write — Create or overwrite files in the sandbox.
+1. file_write — Create or overwrite a file in the sandbox.
    - file_path: Absolute path starting with /home/user/
    - content: Complete file content
 
-2. file_read — Read existing file content from the sandbox (returns content with line numbers).
+2. Read — Read existing file content (returns content with line-number prefixes: spaces + line number + tab + content).
    - file_path: Absolute path starting with /home/user/
    - ALWAYS use this tool to read files. NEVER guess or hallucinate file contents.
    - Use before modifying existing files to understand their current state.
+   - Calling Read is REQUIRED before editing a file with file_editor.
+
+3. file_editor — file editor tool for editing any type of files use this tool when you required to edit file and if you want to update application.
+   - file_path: The absolute path to the file to modify
+   - old_string: The text to replace
+   - new_string: The text to replace it with (must be different from old_string)
+   - replace_all (optional, default false): Replace all occurences of old_string
+
+[Usage:
+- You must use your \`Read\` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked
+- The edit will FAIL if \`old_string\` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use \`replace_all\` to change every instance of \`old_string\`
+- Use \`replace_all\` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance]
 
 Write ALL files needed. Be concise in chat, thorough in code. Build excellence.`,
   };
